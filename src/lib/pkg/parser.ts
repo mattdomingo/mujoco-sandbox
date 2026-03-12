@@ -92,9 +92,17 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   const frameMap = parseCsv(csvText);
   const timestamps = Array.from(frameMap.keys()).sort((a, b) => a - b);
 
+  // Left and right rows arrive at slightly different t_mono values, so most
+  // entries have only one hand. Carry the last known pose forward so both
+  // hands are always present — prevents flickering in the renderer.
+  let lastLeft:  HandPose | null = null;
+  let lastRight: HandPose | null = null;
+
   const frames: CaptureFrame[] = timestamps.map((t, idx) => {
     const entry = frameMap.get(t)!;
-    return { index: idx, timestamp: t, leftHand: entry.left, rightHand: entry.right };
+    if (entry.left)  lastLeft  = entry.left;
+    if (entry.right) lastRight = entry.right;
+    return { index: idx, timestamp: t, leftHand: lastLeft, rightHand: lastRight };
   });
 
   const frameRate = frames.length > 1

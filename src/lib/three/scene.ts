@@ -23,16 +23,16 @@ const BONE_PAIRS: [number, number][] = [
 
 export interface HandScene {
   joints: THREE.Mesh[];
-  bones: THREE.Mesh[];
+  bones:  THREE.Mesh[];
 }
 
 export interface ThreeScene {
   renderer: THREE.WebGLRenderer;
-  scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
+  scene:    THREE.Scene;
+  camera:   THREE.PerspectiveCamera;
   rightHand: HandScene;
-  leftHand: HandScene;
-  dispose: () => void;
+  leftHand:  HandScene;
+  dispose:   () => void;
 }
 
 function makeJointSphere(color: number): THREE.Mesh {
@@ -42,6 +42,7 @@ function makeJointSphere(color: number): THREE.Mesh {
 }
 
 function makeBoneCylinder(color: number): THREE.Mesh {
+  // Unit-height along Y; scaled per-frame to match bone length
   const geo = new THREE.CylinderGeometry(0.005, 0.005, 1, 6);
   const mat = new THREE.MeshStandardMaterial({ color });
   return new THREE.Mesh(geo, mat);
@@ -63,10 +64,27 @@ function makeHandScene(scene: THREE.Scene, color: number): HandScene {
   return { joints, bones };
 }
 
+function makeGrid(scene: THREE.Scene) {
+  // Horizontal floor grid at Y=0.5 (just below where hands typically sit).
+  // AVP hand data spans roughly X: -1.3→1.1, Z: 0→1.0.
+  // GridHelper(size, divisions, centerColor, gridColor)
+  const grid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
+  grid.position.set(0, 0.5, 0.5);  // center on the activity zone
+  scene.add(grid);
+
+  // Vertical back-wall grid for depth reference
+  const backGrid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
+  backGrid.rotation.x = Math.PI / 2;
+  backGrid.position.set(0, 1.0, -0.5);
+  scene.add(backGrid);
+
+  // Axis helper at the activity center — small, just for orientation
+  const axes = new THREE.AxesHelper(0.15);
+  axes.position.set(0, 0.5, 0.5);
+  scene.add(axes);
+}
+
 export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
-  // Use the canvas's actual pixel dimensions. If it hasn't painted yet (0x0),
-  // fall back to the parent's size or a sensible default — resizeRenderer()
-  // will correct it on the next frame.
   const w = canvas.clientWidth  || canvas.parentElement?.clientWidth  || 800;
   const h = canvas.clientHeight || canvas.parentElement?.clientHeight || 600;
 
@@ -76,21 +94,25 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   renderer.setClearColor(0x09090b); // zinc-950
 
   const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x09090b, 8, 20);
 
+  // Camera starts at a fixed wide-angle position that keeps the full
+  // activity zone (X: -1.3→1.1, Y: 0.5→1.6, Z: 0→1.0) in frame.
+  // aimCameraAtCapture() refines this once frame data is available.
   const camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
-  // Default position — will be re-aimed at the hands once frame 0 is available
-  camera.position.set(0, 1.0, 2.0);
-  camera.lookAt(0, 1.0, 0);
+  camera.position.set(0.1, 1.8, 3.2);
+  camera.lookAt(0.1, 1.0, 0.5);
 
   const ambient = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambient);
   const directional = new THREE.DirectionalLight(0xffffff, 1.2);
-  directional.position.set(1, 2, 2);
+  directional.position.set(2, 4, 3);
   scene.add(directional);
 
-  // Right hand: orange, Left hand: blue
-  const rightHand = makeHandScene(scene, 0xe69966);
-  const leftHand  = makeHandScene(scene, 0x6699e6);
+  makeGrid(scene);
+
+  const rightHand = makeHandScene(scene, 0xe69966); // orange
+  const leftHand  = makeHandScene(scene, 0x6699e6); // blue
 
   const dispose = () => {
     renderer.dispose();
@@ -100,12 +122,65 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   return { renderer, scene, camera, rightHand, leftHand, dispose };
 }
 
-// Reusable vectors — avoid per-frame allocation
-const _posA = new THREE.Vector3();
-const _posB = new THREE.Vector3();
-const _mid  = new THREE.Vector3();
-const _dir  = new THREE.Vector3();
-const _up   = new THREE.Vector3(0, 1, 0);
+// ---------------------------------------------------------------------------
+// Camera framing — called once with all frames to compute a stable wide view
+// that keeps the entire capture in frame at all times.
+// ---------------------------------------------------------------------------
+export function aimCameraAtCapture(
+  threeScene: ThreeScene,
+  frames: CaptureFrame[]
+) {
+  const { camera } = threeScene;
+  if (frames.length === 0) return;
+
+  // Sample wrist positions across all frames to find the bounding box
+  let minX =  Infinity, maxX = -Infinity;
+  let minY =  Infinity, maxY = -Infinity;
+  let minZ =  Infinity, maxZ = -Infinity;
+
+  const step = Math.max(1, Math.floor(frames.length / 500)); // sample up to 500 frames
+  for (let i = 0; i < frames.length; i += step) {
+    const f = frames[i];
+    for (const hand of [f.rightHand, f.leftHand]) {
+      if (!hand) continue;
+      const w = hand[24]; // forearmWrist
+      if (!w) continue;
+      if (w.px < minX) minX = w.px;
+      if (w.px > maxX) maxX = w.px;
+      if (w.py < minY) minY = w.py;
+      if (w.py > maxY) maxY = w.py;
+      if (w.pz < minZ) minZ = w.pz;
+      if (w.pz > maxZ) maxZ = w.pz;
+    }
+  }
+
+  if (!isFinite(minX)) return; // no valid data
+
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  // Span across all axes — use the largest to ensure nothing is clipped
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+  const spanZ = maxZ - minZ;
+  const maxSpan = Math.max(spanX, spanY, spanZ, 0.5);
+
+  // Pull camera back far enough to fit the full span with padding,
+  // and position it slightly above and behind the center
+  const dist = maxSpan * 1.6;
+  camera.position.set(cx, cy + maxSpan * 0.3, cz + dist);
+  camera.lookAt(cx, cy, cz);
+}
+
+// ---------------------------------------------------------------------------
+// Bone update helper
+// ---------------------------------------------------------------------------
+const _posA    = new THREE.Vector3();
+const _posB    = new THREE.Vector3();
+const _mid     = new THREE.Vector3();
+const _dir     = new THREE.Vector3();
+const _up      = new THREE.Vector3(0, 1, 0);
 const _boneQuat = new THREE.Quaternion();
 
 function updateBone(bone: THREE.Mesh, a: THREE.Vector3, b: THREE.Vector3) {
@@ -121,45 +196,24 @@ function updateBone(bone: THREE.Mesh, a: THREE.Vector3, b: THREE.Vector3) {
 }
 
 // ---------------------------------------------------------------------------
-// Aim the camera at the centroid of the hands in a given frame.
-// Called once after the first frame is available so the camera is never
-// pointing at empty space.
+// Sync hand meshes from a parsed CaptureFrame
 // ---------------------------------------------------------------------------
-export function aimCameraAtFrame(threeScene: ThreeScene, frame: CaptureFrame) {
-  const { camera } = threeScene;
-  const hand = frame.rightHand ?? frame.leftHand;
-  if (!hand) return;
-
-  // Use the wrist (index 24 = forearmWrist) as the focal point
-  const wrist = hand[24] ?? hand[0];
-  const target = new THREE.Vector3(wrist.px, wrist.py, wrist.pz);
-
-  // Place camera 0.5m behind and 0.3m above the wrist, looking at it
-  camera.position.set(target.x, target.y + 0.3, target.z + 0.5);
-  camera.lookAt(target);
-}
-
-// ---------------------------------------------------------------------------
-// Render directly from a CaptureFrame — used when MuJoCo hasn't loaded yet,
-// or as a fast-path that bypasses MuJoCo when physics output isn't needed.
-// ---------------------------------------------------------------------------
-function syncHandFromFrame(handScene: HandScene, frame: CaptureFrame, chirality: "left" | "right") {
+function syncHandFromFrame(
+  handScene: HandScene,
+  frame: CaptureFrame,
+  chirality: "left" | "right"
+) {
   const hand = chirality === "right" ? frame.rightHand : frame.leftHand;
-
   if (!hand) {
-    // Hide all meshes for this hand
     handScene.joints.forEach(j => { j.visible = false; });
-    handScene.bones.forEach(b => { b.visible = false; });
+    handScene.bones.forEach(b =>  { b.visible = false; });
     return;
   }
-
   handScene.joints.forEach(j => { j.visible = true; });
-
   for (let i = 0; i < HAND_JOINT_NAMES.length; i++) {
-    const pose = hand[i];
-    handScene.joints[i].position.set(pose.px, pose.py, pose.pz);
+    const p = hand[i];
+    handScene.joints[i].position.set(p.px, p.py, p.pz);
   }
-
   for (let b = 0; b < BONE_PAIRS.length; b++) {
     const [ai, bi] = BONE_PAIRS[b];
     _posA.copy(handScene.joints[ai].position);
@@ -176,7 +230,7 @@ export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
 }
 
 // ---------------------------------------------------------------------------
-// Render from MuJoCo state — used during playback after MuJoCo has loaded.
+// Sync hand meshes from MuJoCo mocap state (used during playback)
 // ---------------------------------------------------------------------------
 function syncHandFromMujoco(
   handScene: HandScene,
@@ -186,10 +240,11 @@ function syncHandFromMujoco(
   const { data } = instance;
   for (let i = 0; i < 26; i++) {
     const mid = mocapOffset + i;
-    const x = data.mocap_pos.get(mid * 3 + 0);
-    const y = data.mocap_pos.get(mid * 3 + 1);
-    const z = data.mocap_pos.get(mid * 3 + 2);
-    handScene.joints[i].position.set(x, y, z);
+    handScene.joints[i].position.set(
+      data.mocap_pos.get(mid * 3 + 0),
+      data.mocap_pos.get(mid * 3 + 1),
+      data.mocap_pos.get(mid * 3 + 2)
+    );
     handScene.joints[i].visible = true;
   }
   for (let b = 0; b < BONE_PAIRS.length; b++) {
@@ -203,10 +258,8 @@ function syncHandFromMujoco(
 export function renderFromMujoco(threeScene: ThreeScene, instance: MuJoCoInstance) {
   const { renderer, scene, camera, rightHand, leftHand } = threeScene;
   const { mocapIndex } = instance;
-  const rightOffset = mocapIndex.get("r_thumbKnuckle") ?? 0;
-  const leftOffset  = mocapIndex.get("l_thumbKnuckle") ?? 26;
-  syncHandFromMujoco(rightHand, instance, rightOffset);
-  syncHandFromMujoco(leftHand,  instance, leftOffset);
+  syncHandFromMujoco(rightHand, instance, mocapIndex.get("r_thumbKnuckle") ?? 0);
+  syncHandFromMujoco(leftHand,  instance, mocapIndex.get("l_thumbKnuckle") ?? 26);
   renderer.render(scene, camera);
 }
 

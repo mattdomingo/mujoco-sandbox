@@ -9,7 +9,7 @@ import {
   initThreeScene,
   renderFromFrame,
   renderFromMujoco,
-  aimCameraAtFrame,
+  aimCameraAtCapture,
   resizeRenderer,
 } from "@/lib/three/scene";
 import type { ThreeScene } from "@/lib/three/scene";
@@ -56,12 +56,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       three = initThreeScene(canvas);
       threeRef.current = three;
 
-      // Show frame 0 immediately using direct frame rendering (no MuJoCo needed)
+      // Aim camera to fit the full capture's bounding box, then render frame 0
+      aimCameraAtCapture(three, capture.frames);
       const frame0 = capture.frames[0];
-      if (frame0) {
-        aimCameraAtFrame(three, frame0);
-        renderFromFrame(three, frame0);
-      }
+      if (frame0) renderFromFrame(three, frame0);
 
       // Now kick off MuJoCo async load
       loadMuJoCo()
