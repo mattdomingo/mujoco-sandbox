@@ -2,52 +2,71 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
-import type { PlaybackState, PlaybackControls } from "@/hooks/usePlayback";
 import { usePlayback } from "@/hooks/usePlayback";
 import { loadMuJoCo, applyFrame } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
+import { initThreeScene, renderFrame, resizeRenderer } from "@/lib/three/scene";
+import type { ThreeScene } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
 
 interface CaptureViewerProps {
   capture: ParsedCapture;
-  playbackState?: PlaybackState;
-  playbackControls?: PlaybackControls;
 }
 
 export default function CaptureViewer({ capture }: CaptureViewerProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const instanceRef = useRef<MuJoCoInstance | null>(null);
-  const loadedRef = useRef(false);
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const mujocoRef    = useRef<MuJoCoInstance | null>(null);
+  const threeRef     = useRef<ThreeScene | null>(null);
+  const loadedRef    = useRef(false);
 
+  // Called by usePlayback each tick with the current frame.
+  // 1. Feed frame into MuJoCo  2. Read result back out into Three.js
   const onFrame = useCallback((frame: CaptureFrame) => {
-    if (!instanceRef.current) return;
-    applyFrame(instanceRef.current, frame);
-    // Rendering: MuJoCo WASM does not include a WebGL renderer.
-    // Hook your own Three.js / raw WebGL render call here once you have one.
+    if (!mujocoRef.current || !threeRef.current) return;
+    applyFrame(mujocoRef.current, frame);
+    renderFrame(threeRef.current, mujocoRef.current);
   }, []);
 
   const [playbackState, playbackControls] = usePlayback(capture, onFrame);
 
+  // Init MuJoCo + Three.js once on mount
   useEffect(() => {
-    if (loadedRef.current) return;
+    if (loadedRef.current || !canvasRef.current) return;
     loadedRef.current = true;
 
+    const canvas = canvasRef.current;
+
+    // Three.js can init synchronously
+    const three = initThreeScene(canvas);
+    threeRef.current = three;
+
+    // MuJoCo loads async (fetches XML + WASM)
     loadMuJoCo()
       .then((instance) => {
-        instanceRef.current = instance;
-        // Render first frame immediately so the canvas isn't blank
+        mujocoRef.current = instance;
+        // Render frame 0 immediately so canvas isn't blank
         if (capture.frames.length > 0) {
           applyFrame(instance, capture.frames[0]);
+          renderFrame(three, instance);
         }
       })
-      .catch((err) => {
-        console.error("Failed to load MuJoCo:", err);
-      });
+      .catch((err) => console.error("MuJoCo failed to load:", err));
+
+    // Resize handler
+    const onResize = () => resizeRenderer(three, canvas);
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      three.dispose();
+      threeRef.current = null;
+      loadedRef.current = false;
+    };
   }, [capture]);
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950">
-      <div className="relative flex-1 flex items-center justify-center">
+      <div className="relative flex-1">
         <canvas
           ref={canvasRef}
           className="w-full h-full"
