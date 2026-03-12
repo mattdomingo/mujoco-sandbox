@@ -28,7 +28,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const hasDevicePose = capture.frames.some(f => f.devicePose !== null);
   const [followHead, setFollowHead] = useState(hasDevicePose);
-  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
 
   // Keep a ref so onFrame (memoized via useCallback) can always read the latest toggle value
   const followHeadRef = useRef(followHead);
@@ -48,6 +47,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       renderFromFrame(threeRef.current, frame);
     }
   }, []);
+
+  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
 
   // When the toggle switches to fixed, snap back to the bounding-box view
   const handleToggle = useCallback(() => {
