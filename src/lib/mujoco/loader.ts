@@ -11,7 +11,47 @@ export interface MuJoCoInstance {
   mocapIndex: Map<string, number>;
 }
 
-export async function loadMuJoCo(): Promise<MuJoCoInstance> {
+export type MuJoCoStage =
+  | "booting"      // importing + initialising the WASM module
+  | "fetching"     // fetching holos_hands.xml
+  | "loading"      // MjModel.loadFromXML + MjData
+  | "indexing"     // building the mocap index map
+  | "ready"        // fully loaded
+  | "timeout"      // timed out
+  | "error";       // hard failure
+
+export interface MuJoCoProgress {
+  stage: MuJoCoStage;
+  elapsedMs: number;
+}
+
+export type MuJoCoProgressCallback = (p: MuJoCoProgress) => void;
+
+// Timeout heuristic: base of 15s + 5s per 1 000 frames of capture data.
+// The main cost is booting the WASM (~10MB); the model load itself is fast.
+export function mujocoTimeoutMs(frameCount: number): number {
+  return 15_000 + Math.ceil(frameCount / 1_000) * 5_000;
+}
+
+export async function loadMuJoCo(
+  onProgress?: MuJoCoProgressCallback,
+  timeoutMs = 30_000
+): Promise<MuJoCoInstance> {
+  const startMs = performance.now();
+  const elapsed = () => Math.round(performance.now() - startMs);
+  const report = (stage: MuJoCoStage) => onProgress?.({ stage, elapsedMs: elapsed() });
+
+  // Wrap the whole thing in a race against the timeout
+  return Promise.race([
+    _load(report),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), timeoutMs)
+    ),
+  ]);
+}
+
+async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstance> {
+  report("booting");
   // Load from /public at runtime so Turbopack never tries to bundle the
   // ~10MB Emscripten file (which causes a stack overflow in its regex parser).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -22,31 +62,30 @@ export async function loadMuJoCo(): Promise<MuJoCoInstance> {
   mujoco.FS.mkdir("/working");
   mujoco.FS.mount(mujoco.MEMFS, { root: "." }, "/working");
 
+  report("fetching");
   const xmlResponse = await fetch("/models/holos_hands.xml");
   if (!xmlResponse.ok) throw new Error("Failed to fetch /models/holos_hands.xml");
   const xml = await xmlResponse.text();
   mujoco.FS.writeFile("/working/holos_hands.xml", xml);
 
+  report("loading");
   const model: MjModel = mujoco.MjModel.loadFromXML("/working/holos_hands.xml");
   const data: MjData = new mujoco.MjData(model);
 
-  // Build a map from body name → mocap index so applyFrame can look up fast.
-  // MuJoCo assigns mocap indices in the order bodies appear in the XML.
+  report("indexing");
   const mocapIndex = new Map<string, number>();
   let mocapCount = 0;
   for (let i = 0; i < model.nbody; i++) {
-    // model.body_mocapid[i] is -1 for non-mocap bodies, >=0 for mocap bodies
     const mid: number = model.body_mocapid.get(i);
     if (mid >= 0) {
-      // Decode the body name from MuJoCo's name buffer
       const name: string = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY.value, i);
       mocapIndex.set(name, mid);
       mocapCount++;
     }
   }
 
+  report("ready");
   console.log(`MuJoCo loaded: ${mocapCount} mocap bodies`);
-
   return { mujoco, model, data, mocapIndex };
 }
 

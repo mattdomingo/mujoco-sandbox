@@ -3,8 +3,8 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
-import { loadMuJoCo, applyFrame } from "@/lib/mujoco/loader";
-import type { MuJoCoInstance } from "@/lib/mujoco/loader";
+import { loadMuJoCo, applyFrame, mujocoTimeoutMs } from "@/lib/mujoco/loader";
+import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
 import {
   initThreeScene,
   renderFromFrame,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/three/scene";
 import type { ThreeScene } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
+import MuJoCoStatus from "./MuJoCoStatus";
 
 interface CaptureViewerProps {
   capture: ParsedCapture;
@@ -28,6 +29,13 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const hasDevicePose = capture.frames.some(f => f.devicePose !== null);
   const [followHead, setFollowHead] = useState(hasDevicePose);
+
+  // MuJoCo load status
+  const [mujocoStage, setMujocoStage]     = useState<MuJoCoStage>("booting");
+  const [mujocoElapsed, setMujocoElapsed] = useState(0);
+  // Tick elapsed time while loading
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mujocoStartRef     = useRef<number>(0);
 
   // Keep a ref so onFrame (memoized via useCallback) can always read the latest toggle value
   const followHeadRef = useRef(followHead);
@@ -81,16 +89,40 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       }
       if (frame0) renderFromFrame(three, frame0);
 
-      loadMuJoCo()
+      // Start elapsed timer
+      mujocoStartRef.current = performance.now();
+      elapsedIntervalRef.current = setInterval(() => {
+        setMujocoElapsed(Math.round(performance.now() - mujocoStartRef.current));
+      }, 100);
+
+      const timeout = mujocoTimeoutMs(capture.metadata.frameCount);
+
+      loadMuJoCo(
+        (progress) => {
+          setMujocoStage(progress.stage);
+          setMujocoElapsed(progress.elapsedMs);
+        },
+        timeout
+      )
         .then((instance) => {
           mujocoRef.current = instance;
+          if (elapsedIntervalRef.current) {
+            clearInterval(elapsedIntervalRef.current);
+            elapsedIntervalRef.current = null;
+          }
           if (frame0) {
             applyFrame(instance, frame0);
             renderFromMujoco(three, instance);
           }
-          console.log("MuJoCo ready");
         })
-        .catch((err) => console.error("MuJoCo failed to load:", err));
+        .catch((err: Error) => {
+          if (elapsedIntervalRef.current) {
+            clearInterval(elapsedIntervalRef.current);
+            elapsedIntervalRef.current = null;
+          }
+          setMujocoElapsed(Math.round(performance.now() - mujocoStartRef.current));
+          setMujocoStage(err.message === "timeout" ? "timeout" : "error");
+        });
     });
 
     const onResize = () => {
@@ -100,12 +132,15 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
     return () => {
       cancelAnimationFrame(rafId);
+      if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
       window.removeEventListener("resize", onResize);
       threeRef.current?.dispose();
       threeRef.current = null;
       loadedRef.current = false;
     };
   }, [capture]);
+
+  const mujocoSettled = mujocoStage === "ready" || mujocoStage === "timeout" || mujocoStage === "error";
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950">
@@ -114,6 +149,13 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           ref={canvasRef}
           className="absolute inset-0 w-full h-full"
           style={{ display: "block" }}
+        />
+
+        {/* MuJoCo load status — fades out 3s after settling */}
+        <MuJoCoStatus
+          stage={mujocoStage}
+          elapsedMs={mujocoElapsed}
+          settled={mujocoSettled}
         />
 
         {/* Camera mode toggle — only shown when device pose data exists */}
