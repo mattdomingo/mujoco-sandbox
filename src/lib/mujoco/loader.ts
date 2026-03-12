@@ -12,9 +12,10 @@ export interface MuJoCoInstance {
 }
 
 export async function loadMuJoCo(): Promise<MuJoCoInstance> {
-  // mujoco-js ships a plain Emscripten ESM with no bundler-friendly types
+  // Load from /public at runtime so Turbopack never tries to bundle the
+  // ~10MB Emscripten file (which causes a stack overflow in its regex parser).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { default: loadMujoco } = await import("mujoco-js/dist/mujoco_wasm.js") as any;
+  const { default: loadMujoco } = await import(/* webpackIgnore: true */ "/mujoco_wasm.js") as any;
   const mujoco = await loadMujoco();
 
   // Set up Emscripten's in-memory virtual filesystem
