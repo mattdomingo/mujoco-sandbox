@@ -7,6 +7,7 @@ interface MuJoCoStatusProps {
   stage: MuJoCoStage;
   elapsedMs: number;
   settled: boolean;
+  errorMessage?: string | null;
 }
 
 const STAGE_LABEL: Record<MuJoCoStage, string> = {
@@ -34,7 +35,7 @@ function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export default function MuJoCoStatus({ stage, elapsedMs, settled }: MuJoCoStatusProps) {
+export default function MuJoCoStatus({ stage, elapsedMs, settled, errorMessage }: MuJoCoStatusProps) {
   const [visible, setVisible] = useState(true);
 
   // Auto-hide 3s after settling — but keep failure states visible longer (8s)
@@ -96,11 +97,18 @@ export default function MuJoCoStatus({ stage, elapsedMs, settled }: MuJoCoStatus
 
       {/* Failure note */}
       {isFailure && (
-        <p className="text-xs text-zinc-500 leading-snug">
-          {stage === "timeout"
-            ? "WASM exceeded the time limit. Visualization continues without physics."
-            : "WASM failed to initialize. Visualization continues without physics."}
-        </p>
+        <div className="flex flex-col gap-1">
+          <p className="text-xs text-zinc-500 leading-snug">
+            {stage === "timeout"
+              ? "WASM exceeded the time limit. Visualization continues without physics."
+              : "WASM failed to initialize. Visualization continues without physics."}
+          </p>
+          {errorMessage && (
+            <p className="text-xs text-red-400/70 font-mono break-all leading-snug">
+              {errorMessage}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

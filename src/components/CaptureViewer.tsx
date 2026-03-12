@@ -33,6 +33,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   // MuJoCo load status
   const [mujocoStage, setMujocoStage]     = useState<MuJoCoStage>("booting");
   const [mujocoElapsed, setMujocoElapsed] = useState(0);
+  const [mujocoError, setMujocoError]     = useState<string | null>(null);
   // Tick elapsed time while loading
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mujocoStartRef     = useRef<number>(0);
@@ -121,7 +122,12 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             elapsedIntervalRef.current = null;
           }
           setMujocoElapsed(Math.round(performance.now() - mujocoStartRef.current));
-          setMujocoStage(err.message === "timeout" ? "timeout" : "error");
+          if (err.message === "timeout") {
+            setMujocoStage("timeout");
+          } else {
+            setMujocoStage("error");
+            setMujocoError(err.message ?? String(err));
+          }
         });
     });
 
@@ -156,6 +162,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           stage={mujocoStage}
           elapsedMs={mujocoElapsed}
           settled={mujocoSettled}
+          errorMessage={mujocoError}
         />
 
         {/* Camera mode toggle — only shown when device pose data exists */}

@@ -240,10 +240,11 @@ function syncHandFromMujoco(
   const { data } = instance;
   for (let i = 0; i < 26; i++) {
     const mid = mocapOffset + i;
+    // mocap_pos is a raw WASM typed array — use index access, not .get()
     handScene.joints[i].position.set(
-      data.mocap_pos.get(mid * 3 + 0),
-      data.mocap_pos.get(mid * 3 + 1),
-      data.mocap_pos.get(mid * 3 + 2)
+      data.mocap_pos[mid * 3 + 0],
+      data.mocap_pos[mid * 3 + 1],
+      data.mocap_pos[mid * 3 + 2]
     );
     handScene.joints[i].visible = true;
   }

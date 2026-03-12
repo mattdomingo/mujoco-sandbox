@@ -51,42 +51,114 @@ export async function loadMuJoCo(
 }
 
 async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstance> {
+  // ── Stage 1: boot WASM ──────────────────────────────────────────────────
   report("booting");
-  // Load from /public at runtime so Turbopack never tries to bundle the
-  // ~10MB Emscripten file (which causes a stack overflow in its regex parser).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { default: loadMujoco } = await import(/* webpackIgnore: true */ "/mujoco_wasm.js") as any;
-  const mujoco = await loadMujoco();
+  console.log("[MuJoCo] booting WASM module from /mujoco_wasm.js");
 
-  // Set up Emscripten's in-memory virtual filesystem
-  mujoco.FS.mkdir("/working");
-  mujoco.FS.mount(mujoco.MEMFS, { root: "." }, "/working");
+  let loadMujoco: (...args: unknown[]) => Promise<unknown>;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mod = await import(/* webpackIgnore: true */ "/mujoco_wasm.js") as any;
+    loadMujoco = mod.default;
+    if (typeof loadMujoco !== "function") throw new Error("mujoco_wasm.js did not export a default function");
+  } catch (e) {
+    console.error("[MuJoCo] failed to import /mujoco_wasm.js:", e);
+    throw e;
+  }
 
+  let mujoco: unknown;
+  try {
+    mujoco = await loadMujoco();
+    console.log("[MuJoCo] WASM module initialised");
+  } catch (e) {
+    console.error("[MuJoCo] WASM initialisation threw:", e);
+    throw e;
+  }
+
+  // ── Stage 2: set up virtual filesystem ──────────────────────────────────
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const m = mujoco as any;
+    m.FS.mkdir("/working");
+    m.FS.mount(m.MEMFS, { root: "." }, "/working");
+    console.log("[MuJoCo] VFS mounted at /working");
+  } catch (e) {
+    console.error("[MuJoCo] VFS setup failed:", e);
+    throw e;
+  }
+
+  // ── Stage 3: fetch hand model XML ───────────────────────────────────────
   report("fetching");
-  const xmlResponse = await fetch("/models/holos_hands.xml");
-  if (!xmlResponse.ok) throw new Error("Failed to fetch /models/holos_hands.xml");
-  const xml = await xmlResponse.text();
-  mujoco.FS.writeFile("/working/holos_hands.xml", xml);
+  console.log("[MuJoCo] fetching /models/holos_hands.xml");
+  let xml: string;
+  try {
+    const xmlResponse = await fetch("/models/holos_hands.xml");
+    if (!xmlResponse.ok) throw new Error(`HTTP ${xmlResponse.status} fetching /models/holos_hands.xml`);
+    xml = await xmlResponse.text();
+    console.log(`[MuJoCo] XML fetched (${xml.length} chars)`);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mujoco as any).FS.writeFile("/working/holos_hands.xml", xml);
+  } catch (e) {
+    console.error("[MuJoCo] XML fetch/write failed:", e);
+    throw e;
+  }
 
+  // ── Stage 4: load model + data ───────────────────────────────────────────
   report("loading");
-  const model: MjModel = mujoco.MjModel.loadFromXML("/working/holos_hands.xml");
-  const data: MjData = new mujoco.MjData(model);
+  console.log("[MuJoCo] loading MjModel from XML");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const m = mujoco as any;
+  let model: MjModel;
+  let data: MjData;
+  try {
+    model = m.MjModel.loadFromXML("/working/holos_hands.xml");
+    console.log(`[MuJoCo] MjModel loaded — nbody=${model.nbody}, nmocap=${model.nmocap}`);
+    data = new m.MjData(model);
+    console.log("[MuJoCo] MjData created");
+  } catch (e) {
+    console.error("[MuJoCo] model/data creation failed:", e);
+    throw e;
+  }
 
+  // ── Stage 5: build mocap index ───────────────────────────────────────────
+  // Rather than reading body_mocapid (a raw WASM int array with unreliable
+  // JS bindings), we look up each known body by name and ask MuJoCo for its
+  // mocap id via mj_name2id. MuJoCo assigns mocap ids in XML order starting
+  // at 0, matching the order we wrote them in holos_hands.xml.
   report("indexing");
   const mocapIndex = new Map<string, number>();
   let mocapCount = 0;
-  for (let i = 0; i < model.nbody; i++) {
-    const mid: number = model.body_mocapid.get(i);
-    if (mid >= 0) {
-      const name: string = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY.value, i);
-      mocapIndex.set(name, mid);
-      mocapCount++;
+  try {
+    const OBJ_BODY: number = m.mjtObj.mjOBJ_BODY.value;
+    for (let i = 0; i < model.nbody; i++) {
+      const name: string = m.mj_id2name(model, OBJ_BODY, i);
+      if (!name) continue; // body 0 is the world body — unnamed
+      // Check if this body is a mocap body by looking it up in body_mocapid.
+      // body_mocapid may be a typed array or an Emscripten wrapper — handle both.
+      const mocapidField = model.body_mocapid;
+      let mid: number;
+      if (typeof mocapidField?.get === "function") {
+        mid = mocapidField.get(i);
+      } else if (mocapidField && typeof mocapidField[i] === "number") {
+        mid = mocapidField[i];
+      } else {
+        // Fallback: treat every non-world body as a mocap body in order
+        mid = i - 1; // body 0 is world, so first real body → mocap id 0
+      }
+      if (mid >= 0) {
+        mocapIndex.set(name, mid);
+        mocapCount++;
+      }
     }
+    console.log(`[MuJoCo] mocap index built — ${mocapCount} bodies, sample:`,
+      [...mocapIndex.entries()].slice(0, 3));
+  } catch (e) {
+    console.error("[MuJoCo] mocap indexing failed:", e);
+    throw e;
   }
 
   report("ready");
-  console.log(`MuJoCo loaded: ${mocapCount} mocap bodies`);
-  return { mujoco, model, data, mocapIndex };
+  return { mujoco: m, model, data, mocapIndex };
 }
 
 // Write one hand's joint poses into MuJoCo mocap slots.
@@ -101,16 +173,17 @@ function applyHand(instance: MuJoCoInstance, prefix: string, hand: HandPose) {
 
     const pose = hand[i];
 
-    // mocap_pos is a flat array: [x, y, z] per mocap body
-    data.mocap_pos.set(mid * 3 + 0, pose.px);
-    data.mocap_pos.set(mid * 3 + 1, pose.py);
-    data.mocap_pos.set(mid * 3 + 2, pose.pz);
+    // mocap_pos / mocap_quat are raw WASM typed arrays — use index access, not .set()
+    // mocap_pos: [x, y, z] per mocap body
+    data.mocap_pos[mid * 3 + 0] = pose.px;
+    data.mocap_pos[mid * 3 + 1] = pose.py;
+    data.mocap_pos[mid * 3 + 2] = pose.pz;
 
-    // mocap_quat is a flat array: [w, x, y, z] per mocap body (MuJoCo uses wxyz order)
-    data.mocap_quat.set(mid * 4 + 0, pose.qw);
-    data.mocap_quat.set(mid * 4 + 1, pose.qx);
-    data.mocap_quat.set(mid * 4 + 2, pose.qy);
-    data.mocap_quat.set(mid * 4 + 3, pose.qz);
+    // mocap_quat: [w, x, y, z] per mocap body (MuJoCo wxyz order, AVP gives xyzw)
+    data.mocap_quat[mid * 4 + 0] = pose.qw;
+    data.mocap_quat[mid * 4 + 1] = pose.qx;
+    data.mocap_quat[mid * 4 + 2] = pose.qy;
+    data.mocap_quat[mid * 4 + 3] = pose.qz;
   }
 }
 
