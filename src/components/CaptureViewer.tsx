@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
 import { loadMuJoCo, applyFrame } from "@/lib/mujoco/loader";
@@ -26,11 +26,18 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const threeRef   = useRef<ThreeScene | null>(null);
   const loadedRef  = useRef(false);
 
+  const hasDevicePose = capture.frames.some(f => f.devicePose !== null);
+  const [followHead, setFollowHead] = useState(hasDevicePose);
+  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
+
+  // Keep a ref so onFrame (memoized via useCallback) can always read the latest toggle value
+  const followHeadRef = useRef(followHead);
+  followHeadRef.current = followHead;
+
   const onFrame = useCallback((frame: CaptureFrame) => {
     if (!threeRef.current) return;
 
-    // Move camera to match head position if device pose data is available
-    if (frame.devicePose) {
+    if (followHeadRef.current && frame.devicePose) {
       applyCameraFromDevicePose(threeRef.current, frame);
     }
 
@@ -42,16 +49,22 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     }
   }, []);
 
-  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
+  // When the toggle switches to fixed, snap back to the bounding-box view
+  const handleToggle = useCallback(() => {
+    setFollowHead(prev => {
+      const next = !prev;
+      if (!next && threeRef.current) {
+        aimCameraAtCapture(threeRef.current, capture.frames);
+      }
+      return next;
+    });
+  }, [capture.frames]);
 
   useEffect(() => {
     if (loadedRef.current || !canvasRef.current) return;
     loadedRef.current = true;
 
     const canvas = canvasRef.current;
-
-    // Three.js init — defer one rAF so the canvas has been painted by the
-    // browser and clientWidth/clientHeight are non-zero
     let three: ThreeScene;
     let rafId: number;
 
@@ -60,19 +73,16 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       threeRef.current = three;
 
       const frame0 = capture.frames[0];
-      // Use device pose for initial camera if available, otherwise fit the bounding box
-      if (frame0?.devicePose) {
+      if (frame0?.devicePose && followHeadRef.current) {
         applyCameraFromDevicePose(three, frame0);
       } else {
         aimCameraAtCapture(three, capture.frames);
       }
       if (frame0) renderFromFrame(three, frame0);
 
-      // Now kick off MuJoCo async load
       loadMuJoCo()
         .then((instance) => {
           mujocoRef.current = instance;
-          // Re-render frame 0 now through the MuJoCo pipeline
           if (frame0) {
             applyFrame(instance, frame0);
             renderFromMujoco(three, instance);
@@ -104,6 +114,35 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           className="absolute inset-0 w-full h-full"
           style={{ display: "block" }}
         />
+
+        {/* Camera mode toggle — only shown when device pose data exists */}
+        {hasDevicePose && (
+          <div className="absolute top-3 right-3 flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+            <span className="text-xs text-zinc-400 select-none">Camera</span>
+            <button
+              onClick={handleToggle}
+              className={[
+                "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                "transition-colors duration-200 focus:outline-none",
+                followHead ? "bg-blue-500" : "bg-zinc-600",
+              ].join(" ")}
+              role="switch"
+              aria-checked={followHead}
+              title={followHead ? "Following head — click for fixed view" : "Fixed view — click to follow head"}
+            >
+              <span
+                className={[
+                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                  "transform transition duration-200",
+                  followHead ? "translate-x-4" : "translate-x-0",
+                ].join(" ")}
+              />
+            </button>
+            <span className="text-xs text-zinc-300 select-none w-16">
+              {followHead ? "Follow head" : "Fixed"}
+            </span>
+          </div>
+        )}
       </div>
 
       <PlaybackControlsPanel
