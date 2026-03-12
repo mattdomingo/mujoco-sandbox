@@ -1,32 +1,73 @@
 "use client";
 
 import { useRef, useState, useCallback } from "react";
-import { parsePkg } from "@/lib/pkg/parser";
+import { parseCapture } from "@/lib/pkg/parser";
 import type { ParsedCapture } from "@/lib/pkg/types";
 
 interface PkgDropzoneProps {
   onLoad: (capture: ParsedCapture) => void;
 }
 
-export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
-  const [isDragging, setIsDragging] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+// Recursively read all files out of a DataTransferItem directory entry,
+// returning them as a synthetic FileList-compatible array.
+async function readDirectoryEntry(entry: FileSystemDirectoryEntry): Promise<File[]> {
+  return new Promise((resolve) => {
+    const files: File[] = [];
+    const reader = entry.createReader();
 
-  const handleFile = useCallback(
-    async (file: File) => {
-      if (!file.name.endsWith(".pkg") && !file.name.endsWith(".capture")) {
-        setError("Please drop a .pkg or .capture file.");
-        return;
-      }
+    const readBatch = () => {
+      reader.readEntries(async (entries) => {
+        if (entries.length === 0) { resolve(files); return; }
+
+        for (const e of entries) {
+          if (e.isFile) {
+            const file = await new Promise<File>((res) =>
+              (e as FileSystemFileEntry).file((f) => {
+                // Attach a synthetic webkitRelativePath so findFile() works
+                Object.defineProperty(f, "webkitRelativePath", {
+                  value: e.fullPath.replace(/^\//, ""),
+                  writable: false,
+                });
+                res(f);
+              })
+            );
+            files.push(file);
+          } else if (e.isDirectory) {
+            const nested = await readDirectoryEntry(e as FileSystemDirectoryEntry);
+            files.push(...nested);
+          }
+        }
+        readBatch(); // readEntries returns at most 100 entries — loop until done
+      });
+    };
+
+    readBatch();
+  });
+}
+
+// Convert a plain File[] into something that satisfies the FileList interface
+// (length + indexed access), since parseCapture expects FileList.
+function toFileList(files: File[]): FileList {
+  const dt = new DataTransfer();
+  for (const f of files) dt.items.add(f);
+  return dt.files;
+}
+
+export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
+  const [isDragging, setIsDragging]   = useState(false);
+  const [isLoading, setIsLoading]     = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const folderInputRef                = useRef<HTMLInputElement>(null);
+
+  const handleFiles = useCallback(
+    async (files: FileList) => {
       setError(null);
       setIsLoading(true);
       try {
-        const capture = await parsePkg(file);
+        const capture = await parseCapture(files);
         onLoad(capture);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to parse capture file.");
+        setError(e instanceof Error ? e.message : "Failed to parse capture.");
       } finally {
         setIsLoading(false);
       }
@@ -34,26 +75,46 @@ export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
     [onLoad]
   );
 
+  // Drag-and-drop: use DataTransferItem API to traverse the dropped directory
   const onDrop = useCallback(
-    (e: React.DragEvent) => {
+    async (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+
+      const items = Array.from(e.dataTransfer.items);
+      const allFiles: File[] = [];
+
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry?.();
+        if (!entry) continue;
+
+        if (entry.isDirectory) {
+          const nested = await readDirectoryEntry(entry as FileSystemDirectoryEntry);
+          allFiles.push(...nested);
+        } else if (entry.isFile) {
+          const file = await new Promise<File>((res) =>
+            (entry as FileSystemFileEntry).file(res)
+          );
+          allFiles.push(file);
+        }
+      }
+
+      if (allFiles.length === 0) {
+        setError("Nothing readable was dropped.");
+        return;
+      }
+
+      handleFiles(toFileList(allFiles));
     },
-    [handleFile]
+    [handleFiles]
   );
 
-  const onDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
-
+  const onDragOver  = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
   const onDragLeave = () => setIsDragging(false);
 
-  const onInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
+  // Click-to-browse: folder picker via webkitdirectory
+  const onFolderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) handleFiles(e.target.files);
   };
 
   return (
@@ -61,7 +122,7 @@ export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
-      onClick={() => !isLoading && inputRef.current?.click()}
+      onClick={() => !isLoading && folderInputRef.current?.click()}
       className={[
         "flex flex-col items-center justify-center gap-4",
         "w-96 h-64 rounded-xl border-2 border-dashed cursor-pointer",
@@ -72,12 +133,15 @@ export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
         isLoading ? "cursor-wait opacity-70" : "",
       ].join(" ")}
     >
+      {/* Folder picker — webkitdirectory lets the user select a whole folder */}
       <input
-        ref={inputRef}
+        ref={folderInputRef}
         type="file"
-        accept=".pkg,.capture"
+        // @ts-expect-error — webkitdirectory is not in React's HTMLInputElement types
+        webkitdirectory=""
+        multiple
         className="hidden"
-        onChange={onInputChange}
+        onChange={onFolderChange}
       />
 
       {isLoading ? (
@@ -102,7 +166,7 @@ export default function PkgDropzone({ onLoad }: PkgDropzoneProps) {
           </svg>
           <div className="text-center">
             <p className="text-sm font-medium text-zinc-200">
-              Drop a .pkg file here
+              Drop a .capture folder here
             </p>
             <p className="text-xs text-zinc-500 mt-1">or click to browse</p>
           </div>

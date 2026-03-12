@@ -5,23 +5,6 @@ import type { ParsedCapture } from "@/lib/pkg/types";
 import PkgDropzone from "@/components/PkgDropzone";
 import CaptureViewer from "@/components/CaptureViewer";
 import MetadataPanel from "@/components/MetadataPanel";
-import type { PlaybackState, PlaybackControls } from "@/hooks/usePlayback";
-
-// Placeholder state/controls until usePlayback is implemented
-const PLACEHOLDER_STATE: PlaybackState = {
-  isPlaying: false,
-  frameIndex: 0,
-  speed: 1,
-};
-
-const noop = () => {};
-
-const PLACEHOLDER_CONTROLS: PlaybackControls = {
-  play: noop,
-  pause: noop,
-  seek: noop,
-  setSpeed: noop,
-};
 
 export default function Home() {
   const [capture, setCapture] = useState<ParsedCapture | null>(null);
@@ -41,12 +24,7 @@ export default function Home() {
 
   return (
     <main className="h-full flex">
-      {/* TODO: Replace placeholder state/controls with usePlayback(capture, onFrame) */}
-      <CaptureViewer
-        capture={capture}
-        playbackState={PLACEHOLDER_STATE}
-        playbackControls={PLACEHOLDER_CONTROLS}
-      />
+      <CaptureViewer capture={capture} />
       <MetadataPanel capture={capture} />
     </main>
   );
