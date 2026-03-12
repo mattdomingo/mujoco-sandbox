@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { loadMuJoCo, applyFrame, readContactPressure } from "@/lib/mujoco/loader";
+import { loadMuJoCo, applyFrame, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 
@@ -18,9 +18,10 @@ declare global {
   interface Window {
     __mujocoTest?: {
       instance: MuJoCoInstance;
-      HAND_JOINT_NAMES: string[];
+      HAND_JOINT_NAMES: readonly string[];
       applyFrame: typeof applyFrame;
       readContactPressure: typeof readContactPressure;
+      readInterHandPressure: typeof readInterHandPressure;
     };
   }
 }
@@ -32,12 +33,19 @@ export default function MuJoCoTestPage() {
   useEffect(() => {
     loadMuJoCo((p) => setStatus(`stage:${p.stage}`))
       .then((instance) => {
-        window.__mujocoTest = { instance, HAND_JOINT_NAMES, applyFrame, readContactPressure };
+        window.__mujocoTest = {
+          instance,
+          HAND_JOINT_NAMES,
+          applyFrame,
+          readContactPressure,
+          readInterHandPressure,
+        };
         setStatus("ready");
         setDetail(
           `nbody=${instance.model.nbody} nmocap=${instance.model.nmocap} ` +
           `mocapKeys=${instance.mocapIndex.size} bodyKeys=${instance.bodyIndex.size} ` +
-          `ballBodyId=${instance.ballBodyId} ballGeomId=${instance.ballGeomId}`
+          `ballBodyId=${instance.ballBodyId} ballGeomId=${instance.ballGeomId} ` +
+          `rightHandGeomIds=${instance.rightHandGeomIds.size} leftHandGeomIds=${instance.leftHandGeomIds.size}`
         );
       })
       .catch((e: Error) => {

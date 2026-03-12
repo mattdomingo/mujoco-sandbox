@@ -14,6 +14,11 @@
  *  5. mj_forward() propagates mocap_pos into xpos (physics output ≈ input)
  *  6. mocap_pos and xpos diverge only after we deliberately write different values
  *  7. mj_forward() doesn't corrupt adjacent mocap slots
+ *  8. Ball and hand geoms are indexed for contact queries
+ *  9. Ball contact pressure stays zero when hands are far away
+ * 10. Ball contact pressure becomes non-zero on overlap
+ * 11. Inter-hand contact pressure stays zero when hands are far apart
+ * 12. Inter-hand contact pressure becomes non-zero on overlap
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -329,12 +334,16 @@ test("pressure_ball body and geom are found after model load", async ({ page }) 
       ballBodyId: instance.ballBodyId,
       ballGeomId: instance.ballGeomId,
       ballInBodyIndex: instance.bodyIndex.has("pressure_ball"),
+      rightHandGeomCount: instance.rightHandGeomIds.size,
+      leftHandGeomCount: instance.leftHandGeomIds.size,
     };
   });
 
   expect(result.ballBodyId, "ballBodyId should be >= 0").toBeGreaterThanOrEqual(0);
   expect(result.ballGeomId, "ballGeomId should be >= 0").toBeGreaterThanOrEqual(0);
   expect(result.ballInBodyIndex, "pressure_ball should appear in bodyIndex").toBe(true);
+  expect(result.rightHandGeomCount, "right hand should expose 26 geoms").toBe(26);
+  expect(result.leftHandGeomCount, "left hand should expose 26 geoms").toBe(26);
 });
 
 // ---------------------------------------------------------------------------
@@ -420,4 +429,69 @@ test("readContactPressure returns non-zero pressure when a hand joint overlaps t
 
   expect(result.contactCount, "at least one contact should be detected").toBeGreaterThan(0);
   expect(result.pressure,     "pressure should be > 0 when hand overlaps ball").toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 12 — inter-hand pressure is zero when hands are far apart
+// ---------------------------------------------------------------------------
+test("readInterHandPressure returns zero when hands are far apart", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance, HAND_JOINT_NAMES, applyFrame, readInterHandPressure } = window.__mujocoTest!;
+
+    const farLeftHand = HAND_JOINT_NAMES.map(() => ({
+      px: -5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    const farRightHand = HAND_JOINT_NAMES.map(() => ({
+      px: 5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    applyFrame(instance, {
+      index: 0, timestamp: 0,
+      rightHand: farRightHand, leftHand: farLeftHand,
+      devicePose: null,
+    });
+
+    return readInterHandPressure(instance);
+  });
+
+  expect(result.pressure, "inter-hand pressure should be 0 when hands are far apart").toBe(0);
+  expect(result.contactCount, "inter-hand contactCount should be 0 when hands are far apart").toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 13 — inter-hand pressure is non-zero when one left and one right joint overlap
+// ---------------------------------------------------------------------------
+test("readInterHandPressure returns non-zero pressure when left and right joints overlap", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance, HAND_JOINT_NAMES, applyFrame, readInterHandPressure } = window.__mujocoTest!;
+
+    const overlapPoint = { px: 0.3, py: 1.2, pz: 0.8, qx: 0, qy: 0, qz: 0, qw: 1 };
+    const farLeftHand = HAND_JOINT_NAMES.map(() => ({
+      px: -5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    const farRightHand = HAND_JOINT_NAMES.map(() => ({
+      px: 5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+
+    farLeftHand[0] = overlapPoint;
+    farRightHand[0] = overlapPoint;
+
+    applyFrame(instance, {
+      index: 0, timestamp: 0,
+      rightHand: farRightHand, leftHand: farLeftHand,
+      devicePose: null,
+    });
+
+    return readInterHandPressure(instance);
+  });
+
+  expect(result.contactCount, "at least one inter-hand contact should be detected").toBeGreaterThan(0);
+  expect(result.pressure, "inter-hand pressure should be > 0 when left/right joints overlap").toBeGreaterThan(0);
 });

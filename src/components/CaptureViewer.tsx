@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
-import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure } from "@/lib/mujoco/loader";
+import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
 import {
   initThreeScene,
@@ -44,10 +44,12 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const readModeRef = useRef<MuJoCoReadMode>("mocap");
   readModeRef.current = readMode;
 
-  // Pressure display state — updated each frame via ref to avoid re-render cost,
+  // Contact display state — updated each frame via ref to avoid re-render cost,
   // but also synced to React state at ~10fps for the HUD.
-  const [pressure, setPressure]         = useState(0);
-  const [contactCount, setContactCount] = useState(0);
+  const [ballPressure, setBallPressure]             = useState(0);
+  const [ballContactCount, setBallContactCount]     = useState(0);
+  const [handPressure, setHandPressure]             = useState(0);
+  const [handContactCount, setHandContactCount]     = useState(0);
   const pressureFrameRef = useRef(0); // frame counter for decimating HUD updates
 
   // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
@@ -64,15 +66,18 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     if (mujocoRef.current) {
       applyFrame(mujocoRef.current, frame);
 
-      // Read contact pressure and update the ball mesh every frame
-      const result = readContactPressure(mujocoRef.current);
-      updatePressureBall(threeRef.current, result.ballPos, result.pressure);
+      // Read MuJoCo contact forces and update the ball mesh every frame.
+      const ballResult = readContactPressure(mujocoRef.current);
+      const handResult = readInterHandPressure(mujocoRef.current);
+      updatePressureBall(threeRef.current, ballResult.ballPos, ballResult.pressure);
 
       // Sync React state at ~10fps (every 6 frames at 60fps) to avoid excessive re-renders
       pressureFrameRef.current++;
       if (pressureFrameRef.current % 6 === 0) {
-        setPressure(result.pressure);
-        setContactCount(result.contactCount);
+        setBallPressure(ballResult.pressure);
+        setBallContactCount(ballResult.contactCount);
+        setHandPressure(handResult.pressure);
+        setHandContactCount(handResult.contactCount);
       }
 
       renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current);
@@ -190,7 +195,20 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
         {/* Pressure display — only shown when MuJoCo is running */}
         {mujocoReady && (
-          <PressureDisplay pressure={pressure} contactCount={contactCount} />
+          <div className="absolute bottom-16 right-3 flex flex-col gap-3">
+            <PressureDisplay
+              pressure={ballPressure}
+              contactCount={ballContactCount}
+              label="Ball pressure"
+              caption="MuJoCo contact force on free body"
+            />
+            <PressureDisplay
+              pressure={handPressure}
+              contactCount={handContactCount}
+              label="Inter-hand pressure"
+              caption="MuJoCo left/right hand contact force"
+            />
+          </div>
         )}
 
         {/* Camera mode toggle */}

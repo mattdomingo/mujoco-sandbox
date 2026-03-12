@@ -3,6 +3,9 @@
 interface PressureDisplayProps {
   pressure: number;       // Newtons
   contactCount: number;
+  label?: string;
+  caption?: string;
+  className?: string;
 }
 
 const MAX_PRESSURE = 30; // N — must match scene.ts
@@ -25,13 +28,22 @@ function pressureToCss(pressure: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-export default function PressureDisplay({ pressure, contactCount }: PressureDisplayProps) {
+export default function PressureDisplay({
+  pressure,
+  contactCount,
+  label = "Ball pressure",
+  caption = "MuJoCo contact force",
+  className = "",
+}: PressureDisplayProps) {
   const barFill = Math.min(pressure / MAX_PRESSURE, 1);
   const color   = pressureToCss(pressure);
   const active  = contactCount > 0;
 
   return (
-    <div className="absolute bottom-16 right-3 w-56 bg-zinc-900/90 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2.5 flex flex-col gap-2">
+    <div className={[
+      "w-56 bg-zinc-900/90 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2.5 flex flex-col gap-2",
+      className,
+    ].join(" ").trim()}>
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -40,7 +52,7 @@ export default function PressureDisplay({ pressure, contactCount }: PressureDisp
             className={["flex-shrink-0 w-1.5 h-1.5 rounded-full", active ? "animate-pulse" : ""].join(" ")}
             style={{ background: active ? color : "#52525b" }}
           />
-          <span className="text-xs text-zinc-400 select-none">Ball pressure</span>
+          <span className="text-xs text-zinc-400 select-none">{label}</span>
         </div>
         <span className="text-xs font-mono text-zinc-500">
           {contactCount} contact{contactCount !== 1 ? "s" : ""}
@@ -72,7 +84,7 @@ export default function PressureDisplay({ pressure, contactCount }: PressureDisp
       </div>
 
       <p className="text-[10px] text-zinc-600 leading-snug select-none">
-        MuJoCo contact force · blue→yellow→red
+        {caption} · blue→yellow→red
       </p>
     </div>
   );

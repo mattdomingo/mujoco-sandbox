@@ -1,6 +1,6 @@
 import type { CaptureFrame, HandPose } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
-import type { MjModel, MjData } from "mujoco-js/dist/mujoco_wasm";
+import type { MjModel, MjData, MjContact } from "mujoco-js/dist/mujoco_wasm";
 
 export interface MuJoCoInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -15,6 +15,9 @@ export interface MuJoCoInstance {
   ballGeomId: number;
   // body id of the pressure_ball body (-1 if not found)
   ballBodyId: number;
+  // geom ids belonging to the right-hand and left-hand mocap bodies
+  rightHandGeomIds: Set<number>;
+  leftHandGeomIds: Set<number>;
 }
 
 export type MuJoCoStage =
@@ -64,6 +67,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   let loadMujoco: (...args: unknown[]) => Promise<unknown>;
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // @ts-expect-error Runtime-served asset loaded outside the Next.js module graph.
     const mod = await import(/* webpackIgnore: true */ "/mujoco_wasm.js") as any;
     loadMujoco = mod.default;
     if (typeof loadMujoco !== "function") throw new Error("mujoco_wasm.js did not export a default function");
@@ -130,6 +134,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   report("indexing");
   const mocapIndex = new Map<string, number>();
   const bodyIndex  = new Map<string, number>();
+  const bodyNames: string[] = new Array(model.nbody);
   let mocapCount = 0;
   try {
     const OBJ_BODY: number = m.mjtObj.mjOBJ_BODY.value;
@@ -137,6 +142,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
       const name: string = m.mj_id2name(model, OBJ_BODY, i);
       if (!name) continue;
 
+      bodyNames[i] = name;
       bodyIndex.set(name, i);
 
       const mocapidField = model.body_mocapid;
@@ -159,26 +165,51 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     throw e;
   }
 
-  // ── Stage 6: find pressure_ball geom id ─────────────────────────────────
-  // We need the geom id to match contacts involving the ball each frame.
-  // Scan model.geom_bodyid to find geoms belonging to the ball body.
+  // ── Stage 6: find pressure_ball geom id + hand geom sets ────────────────
+  // These geom ids let us query ball contacts and left↔right hand contacts.
   const ballBodyId = bodyIndex.get("pressure_ball") ?? -1;
   let ballGeomId = -1;
-  if (ballBodyId >= 0) {
-    const ngeom: number = model.ngeom;
-    for (let g = 0; g < ngeom; g++) {
-      if (model.geom_bodyid[g] === ballBodyId) {
-        ballGeomId = g;
-        break;
-      }
+  const rightHandGeomIds = new Set<number>();
+  const leftHandGeomIds = new Set<number>();
+  const ngeom: number = model.ngeom;
+  for (let g = 0; g < ngeom; g++) {
+    const geomBodyId = model.geom_bodyid[g];
+    if (geomBodyId < 0) continue;
+
+    if (geomBodyId === ballBodyId && ballGeomId < 0) {
+      ballGeomId = g;
     }
+
+    const bodyName = bodyNames[geomBodyId];
+    if (!bodyName) continue;
+    if (bodyName.startsWith("r_")) {
+      rightHandGeomIds.add(g);
+    } else if (bodyName.startsWith("l_")) {
+      leftHandGeomIds.add(g);
+    }
+  }
+
+  if (ballBodyId >= 0) {
     console.log(`[MuJoCo] pressure_ball — bodyId=${ballBodyId}, geomId=${ballGeomId}`);
   } else {
     console.warn("[MuJoCo] pressure_ball body not found — contact pressure disabled");
   }
+  console.log(
+    `[MuJoCo] hand geom sets — right=${rightHandGeomIds.size}, left=${leftHandGeomIds.size}`
+  );
 
   report("ready");
-  return { mujoco: m, model, data, mocapIndex, bodyIndex, ballGeomId, ballBodyId };
+  return {
+    mujoco: m,
+    model,
+    data,
+    mocapIndex,
+    bodyIndex,
+    ballGeomId,
+    ballBodyId,
+    rightHandGeomIds,
+    leftHandGeomIds,
+  };
 }
 
 // Write one hand's joint poses into MuJoCo mocap slots.
@@ -213,22 +244,65 @@ export function applyFrame(instance: MuJoCoInstance, frame: CaptureFrame) {
 }
 
 // ---------------------------------------------------------------------------
-// Contact pressure readout — call after applyFrame each frame.
-// Iterates data.contact[0..ncon], finds contacts involving the ball geom,
-// calls mj_contactForce to get the 6-DOF wrench, uses the normal component.
-// Returns total pressure (N) and current ball world-space position.
+// Contact force readouts — call after applyFrame each frame.
+// We read MuJoCo's active contacts and sum the normal force component. For
+// mocap-driven geoms, mj_contactForce may report zero, so we fall back to the
+// corresponding efc_force slot when needed.
 // ---------------------------------------------------------------------------
-export interface PressureResult {
+export interface ContactForceResult {
   pressure: number;           // summed normal contact force in Newtons
-  contactCount: number;       // number of active contacts on the ball
+  contactCount: number;       // number of active contacts matching the query
+}
+
+export interface PressureResult extends ContactForceResult {
   ballPos: [number, number, number];
 }
 
 // Reusable Float64Array for mj_contactForce output (6 elements: fx,fy,fz,tx,ty,tz)
 const _forceBuffer = new Float64Array(6);
 
+function readNormalForce(
+  instance: MuJoCoInstance,
+  contactIndex: number,
+  contact: MjContact
+): number {
+  const { mujoco, model, data } = instance;
+
+  mujoco.mj_contactForce(model, data, contactIndex, _forceBuffer);
+  let normalForce = Math.abs(_forceBuffer[0]);
+
+  // Contacts involving mocap bodies often expose their solver force here.
+  if (normalForce === 0 && contact.efc_address >= 0) {
+    normalForce = Math.abs(data.efc_force[contact.efc_address]);
+  }
+
+  return normalForce;
+}
+
+function readContactForceSum(
+  instance: MuJoCoInstance,
+  includeContact: (contact: MjContact) => boolean
+): ContactForceResult {
+  const { data } = instance;
+  const ncon: number = data.ncon;
+  let pressure = 0;
+  let contactCount = 0;
+
+  for (let c = 0; c < ncon; c++) {
+    const contact = data.contact.get(c);
+    if (!contact) continue;
+    if (contact.exclude !== 0) continue;
+    if (!includeContact(contact)) continue;
+
+    pressure += readNormalForce(instance, c, contact);
+    contactCount++;
+  }
+
+  return { pressure, contactCount };
+}
+
 export function readContactPressure(instance: MuJoCoInstance): PressureResult {
-  const { mujoco, model, data, ballBodyId, ballGeomId } = instance;
+  const { data, ballBodyId, ballGeomId } = instance;
 
   // Ball world position from xpos
   const ballPos: [number, number, number] = ballBodyId >= 0
@@ -237,33 +311,19 @@ export function readContactPressure(instance: MuJoCoInstance): PressureResult {
 
   if (ballGeomId < 0) return { pressure: 0, contactCount: 0, ballPos };
 
-  const ncon: number = data.ncon;
-  let pressure = 0;
-  let contactCount = 0;
+  const result = readContactForceSum(
+    instance,
+    (contact) => contact.geom1 === ballGeomId || contact.geom2 === ballGeomId
+  );
 
-  for (let c = 0; c < ncon; c++) {
-    const contact = data.contact.get(c);
-    if (!contact) continue;
+  return { ...result, ballPos };
+}
 
-    // Check if either geom in this contact is the ball
-    if (contact.geom1 !== ballGeomId && contact.geom2 !== ballGeomId) continue;
-    // Skip inactive contacts (exclude != 0 means filtered out by MuJoCo)
-    if (contact.exclude !== 0) continue;
+export function readInterHandPressure(instance: MuJoCoInstance): ContactForceResult {
+  const { rightHandGeomIds, leftHandGeomIds } = instance;
 
-    // Try mj_contactForce first (standard path for dynamic bodies).
-    // For contacts involving mocap bodies, the solver may store the normal
-    // force in efc_force[efc_address] instead of the contact wrench.
-    mujoco.mj_contactForce(model, data, c, _forceBuffer);
-    let normalForce = Math.abs(_forceBuffer[0]);
-
-    // Fallback: read directly from efc_force if mj_contactForce returned zero
-    if (normalForce === 0 && contact.efc_address >= 0) {
-      normalForce = Math.abs(data.efc_force[contact.efc_address]);
-    }
-
-    pressure += normalForce;
-    contactCount++;
-  }
-
-  return { pressure, contactCount, ballPos };
+  return readContactForceSum(instance, (contact) => (
+    (rightHandGeomIds.has(contact.geom1) && leftHandGeomIds.has(contact.geom2)) ||
+    (rightHandGeomIds.has(contact.geom2) && leftHandGeomIds.has(contact.geom1))
+  ));
 }
