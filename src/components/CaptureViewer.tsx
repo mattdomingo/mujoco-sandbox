@@ -13,7 +13,7 @@ import {
   applyCameraFromDevicePose,
   resizeRenderer,
 } from "@/lib/three/scene";
-import type { ThreeScene } from "@/lib/three/scene";
+import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
 import MuJoCoStatus from "./MuJoCoStatus";
 
@@ -38,6 +38,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mujocoStartRef     = useRef<number>(0);
 
+  const [readMode, setReadMode] = useState<MuJoCoReadMode>("mocap");
+  const readModeRef = useRef<MuJoCoReadMode>("mocap");
+  readModeRef.current = readMode;
+
   // Keep a ref so onFrame (memoized via useCallback) can always read the latest toggle value
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
@@ -51,7 +55,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
     if (mujocoRef.current) {
       applyFrame(mujocoRef.current, frame);
-      renderFromMujoco(threeRef.current, mujocoRef.current);
+      renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current);
     } else {
       renderFromFrame(threeRef.current, frame);
     }
@@ -113,7 +117,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           }
           if (frame0) {
             applyFrame(instance, frame0);
-            renderFromMujoco(three, instance);
+            renderFromMujoco(three, instance, readModeRef.current);
           }
         })
         .catch((err: Error) => {
@@ -190,6 +194,37 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             </button>
             <span className="text-xs text-zinc-300 select-none w-16">
               {followHead ? "Follow head" : "Fixed"}
+            </span>
+          </div>
+        )}
+        {/* Read mode toggle — only shown when MuJoCo is ready */}
+        {mujocoStage === "ready" && (
+          <div className="absolute top-3 left-3 flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+            <span className="text-xs text-zinc-400 select-none">MuJoCo read</span>
+            <button
+              onClick={() => setReadMode(m => m === "mocap" ? "xpos" : "mocap")}
+              className={[
+                "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                "transition-colors duration-200 focus:outline-none",
+                readMode === "xpos" ? "bg-green-500" : "bg-zinc-600",
+              ].join(" ")}
+              role="switch"
+              aria-checked={readMode === "xpos"}
+              title={readMode === "xpos" ? "Reading data.xpos (physics output) — click for mocap_pos" : "Reading data.mocap_pos (raw CSV) — click for xpos"}
+            >
+              <span
+                className={[
+                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                  "transform transition duration-200",
+                  readMode === "xpos" ? "translate-x-4" : "translate-x-0",
+                ].join(" ")}
+              />
+            </button>
+            <span className={[
+              "text-xs select-none w-16 font-mono",
+              readMode === "xpos" ? "text-green-400" : "text-zinc-300",
+            ].join(" ")}>
+              {readMode === "xpos" ? "xpos" : "mocap_pos"}
             </span>
           </div>
         )}

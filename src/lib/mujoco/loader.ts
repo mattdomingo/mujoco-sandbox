@@ -7,8 +7,10 @@ export interface MuJoCoInstance {
   mujoco: any;
   model: MjModel;
   data: MjData;
-  // Lookup table: body name → mocap index (into data.mocap_pos / mocap_quat)
+  // body name → mocap id (index into data.mocap_pos / data.mocap_quat)
   mocapIndex: Map<string, number>;
+  // body name → body id (index into data.xpos / data.xquat)
+  bodyIndex: Map<string, number>;
 }
 
 export type MuJoCoStage =
@@ -127,14 +129,18 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   // at 0, matching the order we wrote them in holos_hands.xml.
   report("indexing");
   const mocapIndex = new Map<string, number>();
+  const bodyIndex  = new Map<string, number>();
   let mocapCount = 0;
   try {
     const OBJ_BODY: number = m.mjtObj.mjOBJ_BODY.value;
     for (let i = 0; i < model.nbody; i++) {
       const name: string = m.mj_id2name(model, OBJ_BODY, i);
       if (!name) continue; // body 0 is the world body — unnamed
-      // Check if this body is a mocap body by looking it up in body_mocapid.
-      // body_mocapid may be a typed array or an Emscripten wrapper — handle both.
+
+      // Store body id for xpos reads
+      bodyIndex.set(name, i);
+
+      // Derive mocap id — body_mocapid may be a typed array or Emscripten wrapper
       const mocapidField = model.body_mocapid;
       let mid: number;
       if (typeof mocapidField?.get === "function") {
@@ -142,23 +148,23 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
       } else if (mocapidField && typeof mocapidField[i] === "number") {
         mid = mocapidField[i];
       } else {
-        // Fallback: treat every non-world body as a mocap body in order
-        mid = i - 1; // body 0 is world, so first real body → mocap id 0
+        mid = i - 1; // fallback: body 0 = world, first real body → mocap id 0
       }
       if (mid >= 0) {
         mocapIndex.set(name, mid);
         mocapCount++;
       }
     }
-    console.log(`[MuJoCo] mocap index built — ${mocapCount} bodies, sample:`,
-      [...mocapIndex.entries()].slice(0, 3));
+    console.log(`[MuJoCo] index built — ${mocapCount} mocap bodies, ${bodyIndex.size} total bodies`);
+    console.log(`[MuJoCo] sample bodyIndex:`, [...bodyIndex.entries()].slice(0, 3));
+    console.log(`[MuJoCo] sample mocapIndex:`, [...mocapIndex.entries()].slice(0, 3));
   } catch (e) {
     console.error("[MuJoCo] mocap indexing failed:", e);
     throw e;
   }
 
   report("ready");
-  return { mujoco: m, model, data, mocapIndex };
+  return { mujoco: m, model, data, mocapIndex, bodyIndex };
 }
 
 // Write one hand's joint poses into MuJoCo mocap slots.

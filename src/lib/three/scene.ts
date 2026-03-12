@@ -230,24 +230,66 @@ export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
 }
 
 // ---------------------------------------------------------------------------
-// Sync hand meshes from MuJoCo mocap state (used during playback)
+// Sync hand meshes from MuJoCo — two read modes:
+//   "mocap"  reads data.mocap_pos  (what we wrote in — the raw CSV values)
+//   "xpos"   reads data.xpos       (what MuJoCo computed after mj_forward)
+// For pure replay these should be near-identical. If xpos looks wrong
+// (all zeros, NaN, or wildly different positions) that indicates a bug in
+// the physics pipeline or body id mapping.
 // ---------------------------------------------------------------------------
+export type MuJoCoReadMode = "mocap" | "xpos";
+
+// Throttle xpos diagnostic logging to once per second
+let _lastXposWarnMs = 0;
+
 function syncHandFromMujoco(
   handScene: HandScene,
   instance: MuJoCoInstance,
-  mocapOffset: number
+  prefix: string,
+  readMode: MuJoCoReadMode
 ) {
-  const { data } = instance;
-  for (let i = 0; i < 26; i++) {
-    const mid = mocapOffset + i;
-    // mocap_pos is a raw WASM typed array — use index access, not .get()
-    handScene.joints[i].position.set(
-      data.mocap_pos[mid * 3 + 0],
-      data.mocap_pos[mid * 3 + 1],
-      data.mocap_pos[mid * 3 + 2]
-    );
+  const { data, mocapIndex, bodyIndex } = instance;
+
+  for (let i = 0; i < HAND_JOINT_NAMES.length; i++) {
+    const bodyName = `${prefix}${HAND_JOINT_NAMES[i]}`;
+    let x: number, y: number, z: number;
+
+    if (readMode === "xpos") {
+      const bid = bodyIndex.get(bodyName);
+      if (bid === undefined) {
+        handScene.joints[i].visible = false;
+        continue;
+      }
+      x = data.xpos[bid * 3 + 0];
+      y = data.xpos[bid * 3 + 1];
+      z = data.xpos[bid * 3 + 2];
+
+      // Diagnostic: warn if xpos looks invalid (all-zero or NaN)
+      const now = performance.now();
+      if (now - _lastXposWarnMs > 1000) {
+        if (isNaN(x) || isNaN(y) || isNaN(z)) {
+          console.warn(`[MuJoCo] xpos NaN for body "${bodyName}" (bid=${bid})`);
+          _lastXposWarnMs = now;
+        } else if (x === 0 && y === 0 && z === 0 && i === 0) {
+          console.warn(`[MuJoCo] xpos is (0,0,0) for "${bodyName}" — body id mapping may be wrong`);
+          _lastXposWarnMs = now;
+        }
+      }
+    } else {
+      const mid = mocapIndex.get(bodyName);
+      if (mid === undefined) {
+        handScene.joints[i].visible = false;
+        continue;
+      }
+      x = data.mocap_pos[mid * 3 + 0];
+      y = data.mocap_pos[mid * 3 + 1];
+      z = data.mocap_pos[mid * 3 + 2];
+    }
+
+    handScene.joints[i].position.set(x, y, z);
     handScene.joints[i].visible = true;
   }
+
   for (let b = 0; b < BONE_PAIRS.length; b++) {
     const [ai, bi] = BONE_PAIRS[b];
     _posA.copy(handScene.joints[ai].position);
@@ -256,11 +298,14 @@ function syncHandFromMujoco(
   }
 }
 
-export function renderFromMujoco(threeScene: ThreeScene, instance: MuJoCoInstance) {
+export function renderFromMujoco(
+  threeScene: ThreeScene,
+  instance: MuJoCoInstance,
+  readMode: MuJoCoReadMode = "mocap"
+) {
   const { renderer, scene, camera, rightHand, leftHand } = threeScene;
-  const { mocapIndex } = instance;
-  syncHandFromMujoco(rightHand, instance, mocapIndex.get("r_thumbKnuckle") ?? 0);
-  syncHandFromMujoco(leftHand,  instance, mocapIndex.get("l_thumbKnuckle") ?? 26);
+  syncHandFromMujoco(rightHand, instance, "r_", readMode);
+  syncHandFromMujoco(leftHand,  instance, "l_", readMode);
   renderer.render(scene, camera);
 }
 
