@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "jszip": "^3.10.1",
+    "mujoco-js": "^0.0.7",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"

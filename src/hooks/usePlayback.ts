@@ -1,3 +1,6 @@
+"use client";
+
+import { useRef, useState, useCallback, useEffect } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 
 export interface PlaybackState {
@@ -17,16 +20,103 @@ export function usePlayback(
   capture: ParsedCapture,
   onFrame: (f: CaptureFrame) => void
 ): [PlaybackState, PlaybackControls] {
-  // TODO: Use useRef to track frameIndex, isPlaying, speed, lastTimestamp
-  // TODO: Implement rAF loop:
-  //       - Compute elapsed time since last frame scaled by speed
-  //       - Advance frameIndex based on elapsed time and capture.metadata.frameRate
-  //       - Call onFrame(capture.frames[frameIndex])
-  //       - Stop loop at last frame or when paused
-  // TODO: Implement play() — set isPlaying=true, kick off rAF loop
-  // TODO: Implement pause() — set isPlaying=false, cancel rAF
-  // TODO: Implement seek(frameIndex) — jump to frame, call onFrame immediately
-  // TODO: Implement setSpeed(speed) — update speed multiplier
-  // TODO: Cleanup rAF on unmount
-  throw new Error("usePlayback not yet implemented");
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeedState] = useState(1);
+
+  const rafRef = useRef<number | null>(null);
+  const lastTimestampRef = useRef<number | null>(null);
+  const frameIndexRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const speedRef = useRef(1);
+
+  const frameCount = capture.metadata.frameCount;
+  const frameRate = capture.metadata.frameRate;
+
+  const stopLoop = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    lastTimestampRef.current = null;
+  }, []);
+
+  const tick = useCallback(
+    (timestamp: number) => {
+      if (!isPlayingRef.current) return;
+
+      if (lastTimestampRef.current === null) {
+        lastTimestampRef.current = timestamp;
+      }
+
+      const elapsed = (timestamp - lastTimestampRef.current) / 1000; // seconds
+      lastTimestampRef.current = timestamp;
+
+      const framesToAdvance = elapsed * frameRate * speedRef.current;
+      const nextIndex = Math.min(
+        Math.floor(frameIndexRef.current + framesToAdvance),
+        frameCount - 1
+      );
+
+      if (nextIndex !== frameIndexRef.current) {
+        frameIndexRef.current = nextIndex;
+        setFrameIndex(nextIndex);
+        onFrame(capture.frames[nextIndex]);
+      }
+
+      if (nextIndex >= frameCount - 1) {
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+        return;
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    },
+    [capture, frameCount, frameRate, onFrame]
+  );
+
+  const play = useCallback(() => {
+    if (isPlayingRef.current) return;
+    // Restart from beginning if at last frame
+    if (frameIndexRef.current >= frameCount - 1) {
+      frameIndexRef.current = 0;
+      setFrameIndex(0);
+      onFrame(capture.frames[0]);
+    }
+    isPlayingRef.current = true;
+    setIsPlaying(true);
+    lastTimestampRef.current = null;
+    rafRef.current = requestAnimationFrame(tick);
+  }, [capture, frameCount, onFrame, tick]);
+
+  const pause = useCallback(() => {
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    stopLoop();
+  }, [stopLoop]);
+
+  const seek = useCallback(
+    (index: number) => {
+      const clamped = Math.max(0, Math.min(index, frameCount - 1));
+      frameIndexRef.current = clamped;
+      setFrameIndex(clamped);
+      onFrame(capture.frames[clamped]);
+    },
+    [capture, frameCount, onFrame]
+  );
+
+  const setSpeed = useCallback((s: number) => {
+    speedRef.current = s;
+    setSpeedState(s);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => stopLoop();
+  }, [stopLoop]);
+
+  return [
+    { isPlaying, frameIndex, speed },
+    { play, pause, seek, setSpeed },
+  ];
 }

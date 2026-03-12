@@ -1,28 +1,49 @@
 "use client";
 
-import { useRef } from "react";
-import type { ParsedCapture } from "@/lib/pkg/types";
+import { useEffect, useRef, useCallback } from "react";
+import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 import type { PlaybackState, PlaybackControls } from "@/hooks/usePlayback";
+import { usePlayback } from "@/hooks/usePlayback";
+import { loadMuJoCo, applyFrame } from "@/lib/mujoco/loader";
+import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import PlaybackControlsPanel from "./PlaybackControls";
 
 interface CaptureViewerProps {
   capture: ParsedCapture;
-  playbackState: PlaybackState;
-  playbackControls: PlaybackControls;
+  playbackState?: PlaybackState;
+  playbackControls?: PlaybackControls;
 }
 
-export default function CaptureViewer({
-  capture,
-  playbackState,
-  playbackControls,
-}: CaptureViewerProps) {
+export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const instanceRef = useRef<MuJoCoInstance | null>(null);
+  const loadedRef = useRef(false);
 
-  // TODO: Call loadMuJoCo() on mount (import from @/lib/mujoco/loader)
-  //       Store { mujoco, model, data } in a ref
-  // TODO: Set up WebGL render loop using the canvas ref
-  //       On each rAF tick, call applyFrame(instance, currentFrame) then render
-  // TODO: Pass onFrame callback to usePlayback that calls applyFrame + render
+  const onFrame = useCallback((frame: CaptureFrame) => {
+    if (!instanceRef.current) return;
+    applyFrame(instanceRef.current, frame);
+    // Rendering: MuJoCo WASM does not include a WebGL renderer.
+    // Hook your own Three.js / raw WebGL render call here once you have one.
+  }, []);
+
+  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
+
+  useEffect(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+
+    loadMuJoCo()
+      .then((instance) => {
+        instanceRef.current = instance;
+        // Render first frame immediately so the canvas isn't blank
+        if (capture.frames.length > 0) {
+          applyFrame(instance, capture.frames[0]);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load MuJoCo:", err);
+      });
+  }, [capture]);
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950">
@@ -32,13 +53,6 @@ export default function CaptureViewer({
           className="w-full h-full"
           style={{ display: "block" }}
         />
-        {/* Placeholder until MuJoCo WASM is wired up */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-500">
-          <p className="text-sm font-mono">MuJoCo not set up yet</p>
-          <p className="text-xs text-zinc-600">
-            See README — place WASM binaries in /public/mujoco/
-          </p>
-        </div>
       </div>
 
       <PlaybackControlsPanel

@@ -1,0 +1,207 @@
+<!--
+  holos_hands.xml
+  MuJoCo model for replaying Apple Vision Pro hand tracking data.
+
+  Each of the 26 AVP hand joints (per hand, 52 total) is represented as a
+  mocap="true" body. Mocap bodies are special — you set their world-space
+  position and rotation directly every frame, bypassing the normal joint/
+  constraint solver. This is exactly what we want for motion capture replay.
+
+  Joint naming follows Apple's HandAnchor skeleton:
+    Thumb:  thumbKnuckle, thumbIntermediateBase, thumbIntermediateTip, thumbTip
+    Index:  indexFingerMetacarpal, indexFingerKnuckle, indexFingerIntermediateBase,
+            indexFingerIntermediateTip, indexFingerTip
+    Middle: middleFingerMetacarpal, middleFingerKnuckle, middleFingerIntermediateBase,
+            middleFingerIntermediateTip, middleFingerTip
+    Ring:   ringFingerMetacarpal, ringFingerKnuckle, ringFingerIntermediateBase,
+            ringFingerIntermediateTip, ringFingerTip
+    Little: littleFingerMetacarpal, littleFingerKnuckle, littleFingerIntermediateBase,
+            littleFingerIntermediateTip, littleFingerTip
+    Forearm: forearmWrist, forearmArm
+
+  Prefix convention: r_ = right hand, l_ = left hand.
+
+  The geom on each body is a small sphere used for contact detection and
+  visualization. Size and appearance can be tuned later.
+-->
+<mujoco model="holos_hands">
+
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+
+  <worldbody>
+
+    <!-- ==================== RIGHT HAND ==================== -->
+
+    <body name="r_thumbKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_thumbIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_thumbIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_thumbTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="r_indexFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_indexFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_indexFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_indexFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_indexFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="r_middleFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_middleFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_middleFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_middleFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_middleFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="r_ringFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_ringFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_ringFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_ringFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_ringFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="r_littleFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_littleFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_littleFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_littleFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_littleFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="r_forearmWrist" mocap="true">
+      <geom type="sphere" size="0.012" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="r_forearmArm" mocap="true">
+      <geom type="sphere" size="0.014" rgba="0.9 0.6 0.4 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <!-- ==================== LEFT HAND ==================== -->
+
+    <body name="l_thumbKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_thumbIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_thumbIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_thumbTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="l_indexFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_indexFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_indexFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_indexFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_indexFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="l_middleFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_middleFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_middleFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_middleFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_middleFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="l_ringFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_ringFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_ringFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_ringFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_ringFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="l_littleFingerMetacarpal" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_littleFingerKnuckle" mocap="true">
+      <geom type="sphere" size="0.008" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_littleFingerIntermediateBase" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_littleFingerIntermediateTip" mocap="true">
+      <geom type="sphere" size="0.007" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_littleFingerTip" mocap="true">
+      <geom type="sphere" size="0.006" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+    <body name="l_forearmWrist" mocap="true">
+      <geom type="sphere" size="0.012" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+    <body name="l_forearmArm" mocap="true">
+      <geom type="sphere" size="0.014" rgba="0.4 0.6 0.9 1" contype="1" conaffinity="1"/>
+    </body>
+
+  </worldbody>
+
+</mujoco>
