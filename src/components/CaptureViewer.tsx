@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
-import { loadMuJoCo, applyFrame, mujocoTimeoutMs } from "@/lib/mujoco/loader";
+import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
 import {
   initThreeScene,
@@ -12,10 +12,12 @@ import {
   aimCameraAtCapture,
   applyCameraFromDevicePose,
   resizeRenderer,
+  updatePressureBall,
 } from "@/lib/three/scene";
 import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
 import MuJoCoStatus from "./MuJoCoStatus";
+import PressureDisplay from "./PressureDisplay";
 
 interface CaptureViewerProps {
   capture: ParsedCapture;
@@ -34,15 +36,21 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const [mujocoStage, setMujocoStage]     = useState<MuJoCoStage>("booting");
   const [mujocoElapsed, setMujocoElapsed] = useState(0);
   const [mujocoError, setMujocoError]     = useState<string | null>(null);
-  // Tick elapsed time while loading
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mujocoStartRef     = useRef<number>(0);
 
+  // Read mode toggle
   const [readMode, setReadMode] = useState<MuJoCoReadMode>("mocap");
   const readModeRef = useRef<MuJoCoReadMode>("mocap");
   readModeRef.current = readMode;
 
-  // Keep a ref so onFrame (memoized via useCallback) can always read the latest toggle value
+  // Pressure display state — updated each frame via ref to avoid re-render cost,
+  // but also synced to React state at ~10fps for the HUD.
+  const [pressure, setPressure]         = useState(0);
+  const [contactCount, setContactCount] = useState(0);
+  const pressureFrameRef = useRef(0); // frame counter for decimating HUD updates
+
+  // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
 
@@ -55,6 +63,18 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
     if (mujocoRef.current) {
       applyFrame(mujocoRef.current, frame);
+
+      // Read contact pressure and update the ball mesh every frame
+      const result = readContactPressure(mujocoRef.current);
+      updatePressureBall(threeRef.current, result.ballPos, result.pressure);
+
+      // Sync React state at ~10fps (every 6 frames at 60fps) to avoid excessive re-renders
+      pressureFrameRef.current++;
+      if (pressureFrameRef.current % 6 === 0) {
+        setPressure(result.pressure);
+        setContactCount(result.contactCount);
+      }
+
       renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current);
     } else {
       renderFromFrame(threeRef.current, frame);
@@ -63,7 +83,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const [playbackState, playbackControls] = usePlayback(capture, onFrame);
 
-  // When the toggle switches to fixed, snap back to the bounding-box view
   const handleToggle = useCallback(() => {
     setFollowHead(prev => {
       const next = !prev;
@@ -94,7 +113,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       }
       if (frame0) renderFromFrame(three, frame0);
 
-      // Start elapsed timer
       mujocoStartRef.current = performance.now();
       elapsedIntervalRef.current = setInterval(() => {
         setMujocoElapsed(Math.round(performance.now() - mujocoStartRef.current));
@@ -151,6 +169,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   }, [capture]);
 
   const mujocoSettled = mujocoStage === "ready" || mujocoStage === "timeout" || mujocoStage === "error";
+  const mujocoReady   = mujocoStage === "ready";
 
   return (
     <div className="flex flex-col flex-1 bg-zinc-950">
@@ -161,7 +180,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           style={{ display: "block" }}
         />
 
-        {/* MuJoCo load status — fades out 3s after settling */}
+        {/* MuJoCo load status */}
         <MuJoCoStatus
           stage={mujocoStage}
           elapsedMs={mujocoElapsed}
@@ -169,7 +188,12 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           errorMessage={mujocoError}
         />
 
-        {/* Camera mode toggle — only shown when device pose data exists */}
+        {/* Pressure display — only shown when MuJoCo is running */}
+        {mujocoReady && (
+          <PressureDisplay pressure={pressure} contactCount={contactCount} />
+        )}
+
+        {/* Camera mode toggle */}
         {hasDevicePose && (
           <div className="absolute top-3 right-3 flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
             <span className="text-xs text-zinc-400 select-none">Camera</span>
@@ -197,8 +221,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             </span>
           </div>
         )}
-        {/* Read mode toggle — only shown when MuJoCo is ready */}
-        {mujocoStage === "ready" && (
+
+        {/* Read mode toggle */}
+        {mujocoReady && (
           <div className="absolute top-3 left-3 flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
             <span className="text-xs text-zinc-400 select-none">MuJoCo read</span>
             <button
@@ -210,7 +235,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
               ].join(" ")}
               role="switch"
               aria-checked={readMode === "xpos"}
-              title={readMode === "xpos" ? "Reading data.xpos (physics output) — click for mocap_pos" : "Reading data.mocap_pos (raw CSV) — click for xpos"}
+              title={readMode === "xpos" ? "Reading data.xpos — click for mocap_pos" : "Reading data.mocap_pos — click for xpos"}
             >
               <span
                 className={[

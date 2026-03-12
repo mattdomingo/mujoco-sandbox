@@ -32,6 +32,7 @@ export interface ThreeScene {
   camera:   THREE.PerspectiveCamera;
   rightHand: HandScene;
   leftHand:  HandScene;
+  pressureBall: THREE.Mesh;
   dispose:   () => void;
 }
 
@@ -65,23 +66,78 @@ function makeHandScene(scene: THREE.Scene, color: number): HandScene {
 }
 
 function makeGrid(scene: THREE.Scene) {
-  // Horizontal floor grid at Y=0.5 (just below where hands typically sit).
-  // AVP hand data spans roughly X: -1.3→1.1, Z: 0→1.0.
-  // GridHelper(size, divisions, centerColor, gridColor)
   const grid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
-  grid.position.set(0, 0.5, 0.5);  // center on the activity zone
+  grid.position.set(0, 0.5, 0.5);
   scene.add(grid);
 
-  // Vertical back-wall grid for depth reference
   const backGrid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
   backGrid.rotation.x = Math.PI / 2;
   backGrid.position.set(0, 1.0, -0.5);
   scene.add(backGrid);
 
-  // Axis helper at the activity center — small, just for orientation
   const axes = new THREE.AxesHelper(0.15);
   axes.position.set(0, 0.5, 0.5);
   scene.add(axes);
+}
+
+// ---------------------------------------------------------------------------
+// Pressure ball — a visible sphere whose color reflects contact pressure.
+// Starts translucent blue; shifts yellow then red as force increases.
+// The position is driven entirely by MuJoCo xpos output each frame.
+// ---------------------------------------------------------------------------
+const BALL_RADIUS = 0.04;
+const _ballColor  = new THREE.Color();
+
+function makePressureBall(scene: THREE.Scene): THREE.Mesh {
+  const geo = new THREE.SphereGeometry(BALL_RADIUS, 16, 16);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x3380ff,
+    transparent: true,
+    opacity: 0.75,
+    roughness: 0.3,
+    metalness: 0.1,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(0, 0.9, 0.5); // matches XML pos
+  scene.add(mesh);
+  return mesh;
+}
+
+// Map pressure (Newtons) → RGB color.
+// 0 N     → blue  (0x3380ff)
+// ~5 N    → cyan  (0x00e5ff)
+// ~15 N   → yellow(0xffe000)
+// ≥30 N   → red   (0xff2020)
+// Scale is tuned for fingertip contact forces; adjust MAX_PRESSURE as needed.
+const MAX_PRESSURE = 30; // N — saturates to full red
+
+function pressureToColor(pressure: number): THREE.Color {
+  const t = Math.min(pressure / MAX_PRESSURE, 1);
+
+  // Three-stop gradient: blue → yellow → red
+  if (t < 0.5) {
+    const s = t * 2; // 0→1 over first half
+    _ballColor.setRGB(s * 1.0, s * 0.88, 1.0 - s * 0.75); // blue→yellow
+  } else {
+    const s = (t - 0.5) * 2; // 0→1 over second half
+    _ballColor.setRGB(1.0, 0.88 - s * 0.75, 0.25 - s * 0.11); // yellow→red
+  }
+  return _ballColor;
+}
+
+export function updatePressureBall(
+  threeScene: ThreeScene,
+  ballPos: [number, number, number],
+  pressure: number
+) {
+  const { pressureBall } = threeScene;
+  pressureBall.position.set(ballPos[0], ballPos[1], ballPos[2]);
+
+  const mat = pressureBall.material as THREE.MeshStandardMaterial;
+  mat.color.copy(pressureToColor(pressure));
+
+  // Increase opacity with pressure: 0.55 at rest → 0.95 at max
+  mat.opacity = 0.55 + Math.min(pressure / MAX_PRESSURE, 1) * 0.40;
 }
 
 export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
@@ -96,9 +152,6 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x09090b, 8, 20);
 
-  // Camera starts at a fixed wide-angle position that keeps the full
-  // activity zone (X: -1.3→1.1, Y: 0.5→1.6, Z: 0→1.0) in frame.
-  // aimCameraAtCapture() refines this once frame data is available.
   const camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
   camera.position.set(0.1, 1.8, 3.2);
   camera.lookAt(0.1, 1.0, 0.5);
@@ -111,20 +164,20 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
 
   makeGrid(scene);
 
-  const rightHand = makeHandScene(scene, 0xe69966); // orange
-  const leftHand  = makeHandScene(scene, 0x6699e6); // blue
+  const rightHand    = makeHandScene(scene, 0xe69966); // orange
+  const leftHand     = makeHandScene(scene, 0x6699e6); // blue
+  const pressureBall = makePressureBall(scene);
 
   const dispose = () => {
     renderer.dispose();
     scene.clear();
   };
 
-  return { renderer, scene, camera, rightHand, leftHand, dispose };
+  return { renderer, scene, camera, rightHand, leftHand, pressureBall, dispose };
 }
 
 // ---------------------------------------------------------------------------
-// Camera framing — called once with all frames to compute a stable wide view
-// that keeps the entire capture in frame at all times.
+// Camera framing
 // ---------------------------------------------------------------------------
 export function aimCameraAtCapture(
   threeScene: ThreeScene,
@@ -133,12 +186,11 @@ export function aimCameraAtCapture(
   const { camera } = threeScene;
   if (frames.length === 0) return;
 
-  // Sample wrist positions across all frames to find the bounding box
   let minX =  Infinity, maxX = -Infinity;
   let minY =  Infinity, maxY = -Infinity;
   let minZ =  Infinity, maxZ = -Infinity;
 
-  const step = Math.max(1, Math.floor(frames.length / 500)); // sample up to 500 frames
+  const step = Math.max(1, Math.floor(frames.length / 500));
   for (let i = 0; i < frames.length; i += step) {
     const f = frames[i];
     for (const hand of [f.rightHand, f.leftHand]) {
@@ -154,20 +206,17 @@ export function aimCameraAtCapture(
     }
   }
 
-  if (!isFinite(minX)) return; // no valid data
+  if (!isFinite(minX)) return;
 
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const cz = (minZ + maxZ) / 2;
 
-  // Span across all axes — use the largest to ensure nothing is clipped
   const spanX = maxX - minX;
   const spanY = maxY - minY;
   const spanZ = maxZ - minZ;
   const maxSpan = Math.max(spanX, spanY, spanZ, 0.5);
 
-  // Pull camera back far enough to fit the full span with padding,
-  // and position it slightly above and behind the center
   const dist = maxSpan * 1.6;
   camera.position.set(cx, cy + maxSpan * 0.3, cz + dist);
   camera.lookAt(cx, cy, cz);
@@ -230,16 +279,10 @@ export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
 }
 
 // ---------------------------------------------------------------------------
-// Sync hand meshes from MuJoCo — two read modes:
-//   "mocap"  reads data.mocap_pos  (what we wrote in — the raw CSV values)
-//   "xpos"   reads data.xpos       (what MuJoCo computed after mj_forward)
-// For pure replay these should be near-identical. If xpos looks wrong
-// (all zeros, NaN, or wildly different positions) that indicates a bug in
-// the physics pipeline or body id mapping.
+// Sync hand meshes from MuJoCo
 // ---------------------------------------------------------------------------
 export type MuJoCoReadMode = "mocap" | "xpos";
 
-// Throttle xpos diagnostic logging to once per second
 let _lastXposWarnMs = 0;
 
 function syncHandFromMujoco(
@@ -264,7 +307,6 @@ function syncHandFromMujoco(
       y = data.xpos[bid * 3 + 1];
       z = data.xpos[bid * 3 + 2];
 
-      // Diagnostic: warn if xpos looks invalid (all-zero or NaN)
       const now = performance.now();
       if (now - _lastXposWarnMs > 1000) {
         if (isNaN(x) || isNaN(y) || isNaN(z)) {
@@ -310,10 +352,7 @@ export function renderFromMujoco(
 }
 
 // ---------------------------------------------------------------------------
-// Camera follow — call each frame when devicePose is available.
-// Places the camera slightly behind and above the head, looking in the
-// direction the head was facing. This gives a natural "over-the-shoulder"
-// perspective matching what the user saw during the capture.
+// Camera follow
 // ---------------------------------------------------------------------------
 const _headPos    = new THREE.Vector3();
 const _headQuat   = new THREE.Quaternion();
@@ -329,18 +368,13 @@ export function applyCameraFromDevicePose(
   if (!dp) return;
 
   _headPos.set(dp.x, dp.y, dp.z);
-  // AVP quaternion is xyzw; Three.js Quaternion is also xyzw
   _headQuat.set(dp.qx, dp.qy, dp.qz, dp.qw).normalize();
-
-  // Head's local forward is -Z; rotate it to world space
   _forward.set(0, 0, -1).applyQuaternion(_headQuat);
 
-  // Camera sits 0.15m behind and 0.05m above the head
   camera.position.copy(_headPos)
     .addScaledVector(_forward, -0.15)
     .y += 0.05;
 
-  // Look 0.8m ahead of the head
   _lookTarget.copy(_headPos).addScaledVector(_forward, 0.8);
   camera.lookAt(_lookTarget);
 }

@@ -45,12 +45,12 @@ test("model loads with correct body and mocap counts", async ({ page }) => {
     };
   });
 
-  // holos_hands.xml defines 52 mocap bodies (26 per hand) + 1 world body
-  // bodyIndex includes the world body if it has a name, so size >= 52
-  expect(nbody,     "nbody should be 53 (world + 52 hand joints)").toBe(53);
+  // holos_hands.xml defines 52 mocap bodies (26 per hand) + 1 world body + 1 free pressure_ball
+  // bodyIndex includes the world body if it has a name, so size >= 53
+  expect(nbody,     "nbody should be 54 (world + 52 hand joints + pressure_ball)").toBe(54);
   expect(nmocap,    "nmocap should be 52").toBe(52);
   expect(mocapKeys, "mocapIndex should have 52 entries").toBe(52);
-  expect(bodyKeys,  "bodyIndex should have at least 52 named bodies").toBeGreaterThanOrEqual(52);
+  expect(bodyKeys,  "bodyIndex should have at least 53 named bodies").toBeGreaterThanOrEqual(53);
 });
 
 // ---------------------------------------------------------------------------
@@ -315,4 +315,109 @@ test("writing one joint does not corrupt adjacent mocap slots", async ({ page })
   expect(result.joint0x, "joint 0 should be unaffected (0)").toBe(0);
   expect(result.joint1x, "joint 1 should hold the written value (7.77)").toBeCloseTo(7.77, 5);
   expect(result.joint2x, "joint 2 should be unaffected (0)").toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 8 — pressure_ball is indexed correctly
+// ---------------------------------------------------------------------------
+test("pressure_ball body and geom are found after model load", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance } = window.__mujocoTest!;
+    return {
+      ballBodyId: instance.ballBodyId,
+      ballGeomId: instance.ballGeomId,
+      ballInBodyIndex: instance.bodyIndex.has("pressure_ball"),
+    };
+  });
+
+  expect(result.ballBodyId, "ballBodyId should be >= 0").toBeGreaterThanOrEqual(0);
+  expect(result.ballGeomId, "ballGeomId should be >= 0").toBeGreaterThanOrEqual(0);
+  expect(result.ballInBodyIndex, "pressure_ball should appear in bodyIndex").toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 9 — ball xpos is initialised near its XML pos (0, 0.9, 0.5)
+// ---------------------------------------------------------------------------
+test("pressure_ball starts near its XML position after mj_forward", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance } = window.__mujocoTest!;
+    const { mujoco, model, data, ballBodyId } = instance;
+    mujoco.mj_forward(model, data);
+    return {
+      x: data.xpos[ballBodyId * 3 + 0],
+      y: data.xpos[ballBodyId * 3 + 1],
+      z: data.xpos[ballBodyId * 3 + 2],
+    };
+  });
+
+  const tol = 0.05; // 5cm tolerance — gravity hasn't moved it far in one step
+  expect(Math.abs(result.x - 0.0), `ball x=${result.x} should be near 0`).toBeLessThan(tol);
+  expect(Math.abs(result.y - 0.9), `ball y=${result.y} should be near 0.9`).toBeLessThan(tol);
+  expect(Math.abs(result.z - 0.5), `ball z=${result.z} should be near 0.5`).toBeLessThan(tol);
+});
+
+// ---------------------------------------------------------------------------
+// Test 10 — contact pressure is zero when no hand joints overlap the ball
+// ---------------------------------------------------------------------------
+test("readContactPressure returns zero when hands are far from the ball", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance, HAND_JOINT_NAMES, applyFrame, readContactPressure } = window.__mujocoTest!;
+
+    // Place all hand joints 5m away from the ball (which sits near 0, 0.9, 0.5)
+    const farHand = HAND_JOINT_NAMES.map(() => ({
+      px: 5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    applyFrame(instance, {
+      index: 0, timestamp: 0,
+      rightHand: farHand, leftHand: farHand,
+      devicePose: null,
+    });
+
+    const { pressure, contactCount } = readContactPressure(instance);
+    return { pressure, contactCount };
+  });
+
+  expect(result.pressure,     "pressure should be 0 when hands are far away").toBe(0);
+  expect(result.contactCount, "contactCount should be 0 when hands are far away").toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 11 — contact pressure is non-zero when a joint is placed inside the ball
+// ---------------------------------------------------------------------------
+test("readContactPressure returns non-zero pressure when a hand joint overlaps the ball", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance, HAND_JOINT_NAMES, applyFrame, readContactPressure } = window.__mujocoTest!;
+
+    // Ball starts at (0, 0.9, 0.5). Place all right-hand joints exactly on top of it
+    // so at least one geom sphere overlaps the ball geom.
+    const onBallHand = HAND_JOINT_NAMES.map(() => ({
+      px: 0.0, py: 0.9, pz: 0.5,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    // Left hand far away
+    const farHand = HAND_JOINT_NAMES.map(() => ({
+      px: 5.0, py: 5.0, pz: 5.0,
+      qx: 0, qy: 0, qz: 0, qw: 1,
+    }));
+    applyFrame(instance, {
+      index: 0, timestamp: 0,
+      rightHand: onBallHand, leftHand: farHand,
+      devicePose: null,
+    });
+
+    const { pressure, contactCount, ballPos } = readContactPressure(instance);
+    return { pressure, contactCount, ballPos };
+  });
+
+  expect(result.contactCount, "at least one contact should be detected").toBeGreaterThan(0);
+  expect(result.pressure,     "pressure should be > 0 when hand overlaps ball").toBeGreaterThan(0);
 });

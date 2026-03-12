@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { loadMuJoCo, applyFrame } from "@/lib/mujoco/loader";
+import { loadMuJoCo, applyFrame, readContactPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 
@@ -20,6 +20,7 @@ declare global {
       instance: MuJoCoInstance;
       HAND_JOINT_NAMES: string[];
       applyFrame: typeof applyFrame;
+      readContactPressure: typeof readContactPressure;
     };
   }
 }
@@ -31,11 +32,12 @@ export default function MuJoCoTestPage() {
   useEffect(() => {
     loadMuJoCo((p) => setStatus(`stage:${p.stage}`))
       .then((instance) => {
-        window.__mujocoTest = { instance, HAND_JOINT_NAMES, applyFrame };
+        window.__mujocoTest = { instance, HAND_JOINT_NAMES, applyFrame, readContactPressure };
         setStatus("ready");
         setDetail(
           `nbody=${instance.model.nbody} nmocap=${instance.model.nmocap} ` +
-          `mocapKeys=${instance.mocapIndex.size} bodyKeys=${instance.bodyIndex.size}`
+          `mocapKeys=${instance.mocapIndex.size} bodyKeys=${instance.bodyIndex.size} ` +
+          `ballBodyId=${instance.ballBodyId} ballGeomId=${instance.ballGeomId}`
         );
       })
       .catch((e: Error) => {
