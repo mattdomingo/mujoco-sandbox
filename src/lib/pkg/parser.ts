@@ -1,4 +1,4 @@
-import type { ParsedCapture, CaptureFrame, HandPose, JointPose } from "./types";
+import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose } from "./types";
 import { HAND_JOINT_NAMES, JOINT_COUNT } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +61,71 @@ function parseCsv(csv: string): Map<number, { left: HandPose | null; right: Hand
 }
 
 // ---------------------------------------------------------------------------
+// Device pose parsing + interpolation
+// ---------------------------------------------------------------------------
+
+function parseDevicePoseCsv(csv: string): DevicePose[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(",").map(h => h.trim());
+  const col = (name: string) => headers.indexOf(name);
+  const tIdx = col("t_mono");
+  const xIdx = col("x"), yIdx = col("y"), zIdx = col("z");
+  const qxIdx = col("qx"), qyIdx = col("qy"), qzIdx = col("qz"), qwIdx = col("qw");
+
+  const poses: DevicePose[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i].trim().split(",");
+    if (row.length < 8) continue;
+    const timestamp = parseFloat(row[tIdx]);
+    const x = parseFloat(row[xIdx]), y = parseFloat(row[yIdx]), z = parseFloat(row[zIdx]);
+    const qx = parseFloat(row[qxIdx]), qy = parseFloat(row[qyIdx]);
+    const qz = parseFloat(row[qzIdx]), qw = parseFloat(row[qwIdx]);
+    if ([timestamp, x, y, z, qx, qy, qz, qw].some(isNaN)) continue;
+    poses.push({ timestamp, x, y, z, qx, qy, qz, qw });
+  }
+  return poses;
+}
+
+// Linear interpolation of device poses sorted by timestamp.
+// For each frame timestamp, finds the two nearest device poses and lerps between them.
+function interpolateDevicePoses(poses: DevicePose[], timestamps: number[]): (DevicePose | null)[] {
+  if (poses.length === 0) return timestamps.map(() => null);
+
+  return timestamps.map((t) => {
+    // Binary search for the first pose with timestamp >= t
+    let lo = 0, hi = poses.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (poses[mid].timestamp < t) lo = mid + 1;
+      else hi = mid;
+    }
+
+    if (lo === 0) return poses[0];
+    if (lo >= poses.length) return poses[poses.length - 1];
+
+    const a = poses[lo - 1];
+    const b = poses[lo];
+    const range = b.timestamp - a.timestamp;
+    const alpha = range < 1e-9 ? 0 : (t - a.timestamp) / range;
+
+    const lerp = (v0: number, v1: number) => v0 + (v1 - v0) * alpha;
+
+    return {
+      timestamp: t,
+      x:  lerp(a.x,  b.x),
+      y:  lerp(a.y,  b.y),
+      z:  lerp(a.z,  b.z),
+      qx: lerp(a.qx, b.qx),
+      qy: lerp(a.qy, b.qy),
+      qz: lerp(a.qz, b.qz),
+      qw: lerp(a.qw, b.qw),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // File list helpers
 // ---------------------------------------------------------------------------
 
@@ -92,6 +157,16 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   const frameMap = parseCsv(csvText);
   const timestamps = Array.from(frameMap.keys()).sort((a, b) => a - b);
 
+  // Parse device pose CSV — optional, used for camera follow
+  let devicePoses: (DevicePose | null)[] = timestamps.map(() => null);
+  const deviceFile = findFile(files, "tracking/device_pose.csv");
+  if (deviceFile) {
+    try {
+      const rawPoses = parseDevicePoseCsv(await deviceFile.text());
+      devicePoses = interpolateDevicePoses(rawPoses, timestamps);
+    } catch { /* non-fatal */ }
+  }
+
   // Left and right rows arrive at slightly different t_mono values, so most
   // entries have only one hand. Carry the last known pose forward so both
   // hands are always present — prevents flickering in the renderer.
@@ -102,7 +177,7 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
     const entry = frameMap.get(t)!;
     if (entry.left)  lastLeft  = entry.left;
     if (entry.right) lastRight = entry.right;
-    return { index: idx, timestamp: t, leftHand: lastLeft, rightHand: lastRight };
+    return { index: idx, timestamp: t, leftHand: lastLeft, rightHand: lastRight, devicePose: devicePoses[idx] };
   });
 
   const frameRate = frames.length > 1

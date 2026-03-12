@@ -10,6 +10,7 @@ import {
   renderFromFrame,
   renderFromMujoco,
   aimCameraAtCapture,
+  applyCameraFromDevicePose,
   resizeRenderer,
 } from "@/lib/three/scene";
 import type { ThreeScene } from "@/lib/three/scene";
@@ -28,13 +29,15 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const onFrame = useCallback((frame: CaptureFrame) => {
     if (!threeRef.current) return;
 
+    // Move camera to match head position if device pose data is available
+    if (frame.devicePose) {
+      applyCameraFromDevicePose(threeRef.current, frame);
+    }
+
     if (mujocoRef.current) {
-      // MuJoCo loaded — run physics pipeline then render from its state
       applyFrame(mujocoRef.current, frame);
       renderFromMujoco(threeRef.current, mujocoRef.current);
     } else {
-      // MuJoCo still loading — render directly from frame data so the
-      // canvas isn't blank while the WASM boots up
       renderFromFrame(threeRef.current, frame);
     }
   }, []);
@@ -56,9 +59,13 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       three = initThreeScene(canvas);
       threeRef.current = three;
 
-      // Aim camera to fit the full capture's bounding box, then render frame 0
-      aimCameraAtCapture(three, capture.frames);
       const frame0 = capture.frames[0];
+      // Use device pose for initial camera if available, otherwise fit the bounding box
+      if (frame0?.devicePose) {
+        applyCameraFromDevicePose(three, frame0);
+      } else {
+        aimCameraAtCapture(three, capture.frames);
+      }
       if (frame0) renderFromFrame(three, frame0);
 
       // Now kick off MuJoCo async load

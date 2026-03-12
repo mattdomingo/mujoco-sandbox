@@ -48,11 +48,19 @@ export interface CaptureMetadata {
   frameCount: number;
 }
 
+// World-space pose of the AVP headset (device_pose.csv).
+export interface DevicePose {
+  timestamp: number;  // t_mono
+  x: number; y: number; z: number;           // position (meters)
+  qx: number; qy: number; qz: number; qw: number; // orientation
+}
+
 export interface CaptureFrame {
   index: number;
   timestamp: number;   // seconds since session start (t_mono)
-  leftHand: HandPose | null;   // null if this hand was not tracked this frame
+  leftHand: HandPose | null;
   rightHand: HandPose | null;
+  devicePose: DevicePose | null;  // headset pose at this timestamp (interpolated)
 }
 
 export interface ParsedCapture {

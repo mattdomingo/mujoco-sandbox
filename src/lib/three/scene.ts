@@ -263,6 +263,42 @@ export function renderFromMujoco(threeScene: ThreeScene, instance: MuJoCoInstanc
   renderer.render(scene, camera);
 }
 
+// ---------------------------------------------------------------------------
+// Camera follow — call each frame when devicePose is available.
+// Places the camera slightly behind and above the head, looking in the
+// direction the head was facing. This gives a natural "over-the-shoulder"
+// perspective matching what the user saw during the capture.
+// ---------------------------------------------------------------------------
+const _headPos    = new THREE.Vector3();
+const _headQuat   = new THREE.Quaternion();
+const _forward    = new THREE.Vector3();
+const _lookTarget = new THREE.Vector3();
+
+export function applyCameraFromDevicePose(
+  threeScene: ThreeScene,
+  frame: CaptureFrame
+) {
+  const { camera } = threeScene;
+  const dp = frame.devicePose;
+  if (!dp) return;
+
+  _headPos.set(dp.x, dp.y, dp.z);
+  // AVP quaternion is xyzw; Three.js Quaternion is also xyzw
+  _headQuat.set(dp.qx, dp.qy, dp.qz, dp.qw).normalize();
+
+  // Head's local forward is -Z; rotate it to world space
+  _forward.set(0, 0, -1).applyQuaternion(_headQuat);
+
+  // Camera sits 0.15m behind and 0.05m above the head
+  camera.position.copy(_headPos)
+    .addScaledVector(_forward, -0.15)
+    .y += 0.05;
+
+  // Look 0.8m ahead of the head
+  _lookTarget.copy(_headPos).addScaledVector(_forward, 0.8);
+  camera.lookAt(_lookTarget);
+}
+
 export function resizeRenderer(threeScene: ThreeScene, canvas: HTMLCanvasElement) {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
