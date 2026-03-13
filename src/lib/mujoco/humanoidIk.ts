@@ -192,6 +192,12 @@ export function computeHumanoidIKBackground(
           lShoulder2: prev ? smoothAngle(lIK.shoulder2, prev.lShoulder2) : lIK.shoulder2,
           lElbow:     prev ? smoothAngle(lIK.elbow,     prev.lElbow)     : lIK.elbow,
           lReachable: lIK.reachable,
+          rShoulder1Clamped: rIK.shoulder1Clamped,
+          rShoulder2Clamped: rIK.shoulder2Clamped,
+          rElbowClamped:     rIK.elbowClamped,
+          lShoulder1Clamped: lIK.shoulder1Clamped,
+          lShoulder2Clamped: lIK.shoulder2Clamped,
+          lElbowClamped:     lIK.elbowClamped,
         },
       });
     }

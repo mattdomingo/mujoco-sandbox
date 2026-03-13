@@ -81,6 +81,13 @@ export interface HumanoidArmAngles {
   lShoulder2: number;
   lElbow: number;
   lReachable: boolean;
+  // Violation flags — true when raw IK angle exceeded anatomical clamp
+  rShoulder1Clamped: boolean;
+  rShoulder2Clamped: boolean;
+  rElbowClamped: boolean;
+  lShoulder1Clamped: boolean;
+  lShoulder2Clamped: boolean;
+  lElbowClamped: boolean;
 }
 
 // Per-frame humanoid pose: torso driven from devicePose, arms from IK.

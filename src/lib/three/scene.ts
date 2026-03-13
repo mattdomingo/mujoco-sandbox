@@ -463,10 +463,13 @@ export function makeHumanoidScene(scene: THREE.Scene): HumanoidScene {
 
 const _hPosA = new THREE.Vector3();
 const _hPosB = new THREE.Vector3();
+const _colorNormal    = new THREE.Color(0x888888);
+const _colorViolation = new THREE.Color(0xff3333);
 
-function renderHumanoidFromMujoco(
+export function renderHumanoidFromMujoco(
   humanoidScene: HumanoidScene,
-  instance: MuJoCoInstance
+  instance: MuJoCoInstance,
+  violatedBodies?: Set<string>
 ) {
   const { data, humanoidBodyIds, mocapIndex } = instance;
   const { joints, bones, segmentPairs } = humanoidScene;
@@ -481,17 +484,19 @@ function renderHumanoidFromMujoco(
         data.mocap_pos[mid * 3 + 2]
       );
       mesh.visible = true;
-      continue;
+    } else {
+      // Humanoid dynamic body: read from xpos
+      const bid = humanoidBodyIds.get(name);
+      if (bid === undefined) { mesh.visible = false; continue; }
+      mesh.position.set(
+        data.xpos[bid * 3 + 0],
+        data.xpos[bid * 3 + 1],
+        data.xpos[bid * 3 + 2]
+      );
+      mesh.visible = true;
     }
-    // Humanoid dynamic body: read from xpos
-    const bid = humanoidBodyIds.get(name);
-    if (bid === undefined) { mesh.visible = false; continue; }
-    mesh.position.set(
-      data.xpos[bid * 3 + 0],
-      data.xpos[bid * 3 + 1],
-      data.xpos[bid * 3 + 2]
-    );
-    mesh.visible = true;
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    mat.color.copy(violatedBodies?.has(name) ? _colorViolation : _colorNormal);
   }
 
   for (let i = 0; i < segmentPairs.length; i++) {
@@ -505,6 +510,9 @@ function renderHumanoidFromMujoco(
     _hPosA.copy(meshA.position);
     _hPosB.copy(meshB.position);
     updateBone(bones[i], _hPosA, _hPosB);
+    const violated = violatedBodies?.has(nameA) || violatedBodies?.has(nameB);
+    const boneMat = bones[i].material as THREE.MeshStandardMaterial;
+    boneMat.color.copy(violated ? _colorViolation : _colorNormal);
   }
 }
 
@@ -512,13 +520,14 @@ export function renderFromMujoco(
   threeScene: ThreeScene,
   instance: MuJoCoInstance,
   readMode: MuJoCoReadMode = "mocap",
-  showHumanoid = true
+  showHumanoid = true,
+  violatedBodies?: Set<string>
 ) {
   const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
   const hideForarm = threeScene.humanoid !== null && showHumanoid;
   syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
-  if (threeScene.humanoid && showHumanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
+  if (threeScene.humanoid && showHumanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance, violatedBodies);
   if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }

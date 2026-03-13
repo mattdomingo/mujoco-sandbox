@@ -74,6 +74,10 @@ export interface ArmIKResult {
   shoulder2: number;
   elbow: number;
   reachable: boolean;
+  // true when the raw solve was outside anatomical limits
+  shoulder1Clamped: boolean;
+  shoulder2Clamped: boolean;
+  elbowClamped: boolean;
 }
 
 /**
@@ -162,6 +166,16 @@ export function solveArmIK(
   _n.crossVectors(_dNorm, _hint).normalize();
   _eOut.crossVectors(_n, _dNorm).normalize();
 
+  // ── Frontal-plane constraint: elbow must not go behind the torso ─────────
+  // In torso-local Z-up frame, forward is +X. Negative local-X means behind the body.
+  const _eOutLocal = _eOut.clone().applyQuaternion(_invTorso);
+  if (_eOutLocal.x < 0) {
+    _eOutLocal.x = 0;
+    if (_eOutLocal.lengthSq() < 1e-6) _eOutLocal.set(0, -1, 0);
+    else _eOutLocal.normalize();
+    _eOut.copy(_eOutLocal).applyQuaternion(_torsoQuat);
+  }
+
   _elbowWorld
     .copy(_shoulderPos)
     .addScaledVector(_dNorm, U * Math.cos(innerAngle))
@@ -221,15 +235,28 @@ export function solveArmIK(
     if (dot2 < 0) shoulder2 = -shoulder2;
   }
 
-  const S_MIN = -85 * (Math.PI / 180);
-  const S_MAX =  60 * (Math.PI / 180);
-  const E_MIN = -100 * (Math.PI / 180);
-  const E_MAX =   50 * (Math.PI / 180);
+  // Shoulder1 (primary swing — up/down elevation)
+  const S1_MIN = -80 * (Math.PI / 180);
+  const S1_MAX =  60 * (Math.PI / 180);
+  // Shoulder2 (secondary swing — forward/backward reach)
+  // Forward reach (+) is wider than backward reach (-) anatomically
+  const S2_MIN = -30 * (Math.PI / 180);
+  const S2_MAX =  60 * (Math.PI / 180);
+  // Elbow: can only flex, cannot hyperextend
+  const E_MIN = -90 * (Math.PI / 180);
+  const E_MAX =   0 * (Math.PI / 180);
+
+  const rawS1 = shoulder1;
+  const rawS2 = shoulder2;
+  const rawE  = elbow;
 
   return {
-    shoulder1: clamp(shoulder1, S_MIN, S_MAX),
-    shoulder2: clamp(shoulder2, S_MIN, S_MAX),
-    elbow:     clamp(elbow,     E_MIN, E_MAX),
+    shoulder1: clamp(shoulder1, S1_MIN, S1_MAX),
+    shoulder2: clamp(shoulder2, S2_MIN, S2_MAX),
+    elbow:     clamp(elbow,     E_MIN,  E_MAX),
     reachable,
+    shoulder1Clamped: rawS1 < S1_MIN || rawS1 > S1_MAX,
+    shoulder2Clamped: rawS2 < S2_MIN || rawS2 > S2_MAX,
+    elbowClamped:     rawE  < E_MIN  || rawE  > E_MAX,
   };
 }
