@@ -218,6 +218,28 @@ The cancel function sets `cancelled = true`; called on component unmount to avoi
 
 IK starts immediately after MuJoCo loads (not during MuJoCo loading). If no device pose exists in the capture, IK is skipped entirely.
 
+### What "Computing humanoid IK…" actually does
+
+When the progress bar is visible, the system is pre-computing a `HumanoidFrame` for every frame in the capture. Per frame:
+
+1. **Torso position** — takes the AVP headset position and rotates a fixed head-local offset `(0, -0.25, 0.05)` by the head orientation. This places the torso ~25 cm below and ~5 cm behind the head, and makes it follow pitch/lean naturally rather than just tracking horizontal position.
+
+2. **Torso rotation** — extracts only the horizontal yaw from the headset orientation (pitch and roll are discarded so the stick figure stands upright even when the user looks down). Yaw is computed relative to the first frame's heading so the figure starts facing forward.
+
+3. **Right arm IK** — given the torso pose, shoulder origin, wrist target (`forearmWrist`, AVP joint 24), and elbow hint (`forearmArm`, AVP joint 25 — a real measured point near the elbow), solves for the three hinge angles: `shoulder1_right`, `shoulder2_right`, `elbow_right`.
+
+4. **Left arm IK** — same for the left side.
+
+5. **Stores result** — pushes a `HumanoidFrame` with torso pose + 3 arm angles per side into the output array.
+
+### Why batching is necessary
+
+Processing thousands of frames synchronously would freeze the browser. Each batch of 50 frames runs inside a `setTimeout(processBatch, 0)` call, which hands control back to the browser between batches. The progress bar counts batches completing. Once the final batch finishes, `onComplete` fires and playback becomes available.
+
+### The output
+
+A `HumanoidFrame[]` array — one entry per capture frame — with pre-baked joint angles ready to be written directly into MuJoCo `qpos` during playback. **No IK math runs during the playback loop** — it just looks up the pre-computed answer for the current frame index.
+
 ---
 
 ## MuJoCo integration (`src/lib/mujoco/loader.ts`)
