@@ -143,6 +143,67 @@ function findFile(files: FileList, relativePath: string): File | null {
 }
 
 // ---------------------------------------------------------------------------
+// Hand pose interpolation helpers
+// ---------------------------------------------------------------------------
+
+function lerpJoint(a: JointPose, b: JointPose, t: number): JointPose {
+  const lerp = (v0: number, v1: number) => v0 + (v1 - v0) * t;
+  return {
+    px: lerp(a.px, b.px), py: lerp(a.py, b.py), pz: lerp(a.pz, b.pz),
+    qx: lerp(a.qx, b.qx), qy: lerp(a.qy, b.qy), qz: lerp(a.qz, b.qz), qw: lerp(a.qw, b.qw),
+  };
+}
+
+function lerpHandPose(a: HandPose, b: HandPose, t: number): HandPose {
+  return a.map((joint, i) => lerpJoint(joint, b[i], t));
+}
+
+/**
+ * Fill gaps in a sparse array of hand poses using linear interpolation.
+ * Entries that are null represent frames where tracking was lost.
+ * Each null run is filled by lerping between the last known pose before
+ * the gap and the first known pose after it, so the hand moves smoothly
+ * through the gap instead of freezing.
+ *
+ * Frames before the first valid pose or after the last valid pose are
+ * filled with the nearest boundary pose (hold, no extrapolation).
+ */
+function interpolateHandPoses(poses: (HandPose | null)[]): (HandPose | null)[] {
+  const result = poses.slice();
+  const n = result.length;
+
+  // Find first and last valid indices
+  let first = -1, last = -1;
+  for (let i = 0; i < n; i++) if (result[i]) { if (first < 0) first = i; last = i; }
+  if (first < 0) return result; // all null — nothing to do
+
+  // Hold first pose backward to frame 0
+  for (let i = 0; i < first; i++) result[i] = result[first];
+
+  // Hold last pose forward to end
+  for (let i = last + 1; i < n; i++) result[i] = result[last];
+
+  // Lerp across interior gaps
+  let gapStart = -1;
+  for (let i = first; i <= last; i++) {
+    if (result[i] === null && gapStart < 0) {
+      gapStart = i;
+    } else if (result[i] !== null && gapStart >= 0) {
+      // Gap runs from gapStart to i-1; anchor poses are at gapStart-1 and i
+      const before = result[gapStart - 1]!;
+      const after  = result[i]!;
+      const span   = i - gapStart + 1; // total steps including endpoints
+      for (let j = gapStart; j < i; j++) {
+        result[j] = lerpHandPose(before, after, (j - gapStart + 1) / span);
+      }
+      gapStart = -1;
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -168,17 +229,20 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   }
 
   // Left and right rows arrive at slightly different t_mono values, so most
-  // entries have only one hand. Carry the last known pose forward so both
-  // hands are always present — prevents flickering in the renderer.
-  let lastLeft:  HandPose | null = null;
-  let lastRight: HandPose | null = null;
+  // entries have only one hand. Build sparse arrays then interpolate across
+  // gaps so hands move smoothly through tracking drop-outs instead of freezing.
+  const rawLeft:  (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.left);
+  const rawRight: (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.right);
+  const interpLeft  = interpolateHandPoses(rawLeft);
+  const interpRight = interpolateHandPoses(rawRight);
 
-  const frames: CaptureFrame[] = timestamps.map((t, idx) => {
-    const entry = frameMap.get(t)!;
-    if (entry.left)  lastLeft  = entry.left;
-    if (entry.right) lastRight = entry.right;
-    return { index: idx, timestamp: t, leftHand: lastLeft, rightHand: lastRight, devicePose: devicePoses[idx] };
-  });
+  const frames: CaptureFrame[] = timestamps.map((t, idx) => ({
+    index: idx,
+    timestamp: t,
+    leftHand:  interpLeft[idx],
+    rightHand: interpRight[idx],
+    devicePose: devicePoses[idx],
+  }));
 
   const frameRate = frames.length > 1
     ? 1 / (frames[1].timestamp - frames[0].timestamp)

@@ -26,11 +26,28 @@
  */
 
 import * as THREE from "three";
-import type { CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
+import type { CaptureFrame, HumanoidFrame, GhostInterpolationStats } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL } from "./ik";
 
 const BATCH_SIZE = 50;
+const IK_SMOOTH_ALPHA = 0.4; // 0 = frozen, 1 = no filter
+const TELEPORT_THRESHOLD_M = 0.3;
+
+function smoothAngle(current: number, prev: number): number {
+  return prev + IK_SMOOTH_ALPHA * (current - prev);
+}
+
+function detectTeleport(
+  prevPos: [number, number, number] | undefined,
+  curr: [number, number, number]
+): boolean {
+  if (!prevPos) return false;
+  const dx = curr[0] - prevPos[0];
+  const dy = curr[1] - prevPos[1];
+  const dz = curr[2] - prevPos[2];
+  return (dx * dx + dy * dy + dz * dz) > TELEPORT_THRESHOLD_M * TELEPORT_THRESHOLD_M;
+}
 const WRIST_IDX    = HAND_JOINT_NAMES.indexOf("forearmWrist"); // 24
 const FOREARM_IDX  = HAND_JOINT_NAMES.indexOf("forearmArm");  // 25
 
@@ -114,12 +131,18 @@ const baseWXYZ: [number, number, number, number] = [
 export function computeHumanoidIKBackground(
   frames: CaptureFrame[],
   onProgress: (solved: number, total: number) => void,
-  onComplete: (humanoidFrames: HumanoidFrame[]) => void
+  onComplete: (humanoidFrames: HumanoidFrame[], stats: GhostInterpolationStats) => void,
+  ghostInterpolationEnabled: boolean = false,
 ): () => void {
   let cancelled = false;
   let solved = 0;
   const results: HumanoidFrame[] = [];
   const total = frames.length;
+
+  let rGhostCount = 0;
+  let lGhostCount = 0;
+  let lastGoodRWrist: [number, number, number] | undefined;
+  let lastGoodLWrist: [number, number, number] | undefined;
 
   // Reference yaw from first frame that has device pose
   const firstDp = frames.find(f => f.devicePose)?.devicePose ?? null;
@@ -148,11 +171,11 @@ export function computeHumanoidIKBackground(
       const rWrist = frame.rightHand?.[WRIST_IDX];
       const lWrist = frame.leftHand?.[WRIST_IDX];
 
-      const rTarget: [number, number, number] = rWrist
+      let rTarget: [number, number, number] = rWrist
         ? [rWrist.px, rWrist.py, rWrist.pz]
         : [torsoPos[0] + 0.4, torsoPos[1] - 0.2, torsoPos[2]];
 
-      const lTarget: [number, number, number] = lWrist
+      let lTarget: [number, number, number] = lWrist
         ? [lWrist.px, lWrist.py, lWrist.pz]
         : [torsoPos[0] - 0.4, torsoPos[1] - 0.2, torsoPos[2]];
 
@@ -161,29 +184,62 @@ export function computeHumanoidIKBackground(
       const rForearm = frame.rightHand?.[FOREARM_IDX];
       const lForearm = frame.leftHand?.[FOREARM_IDX];
 
-      const rElbowHint: [number, number, number] | undefined = rForearm
+      let rElbowHint: [number, number, number] | undefined = rForearm
         ? [rForearm.px, rForearm.py, rForearm.pz]
         : undefined;
 
-      const lElbowHint: [number, number, number] | undefined = lForearm
+      let lElbowHint: [number, number, number] | undefined = lForearm
         ? [lForearm.px, lForearm.py, lForearm.pz]
         : undefined;
 
-      const rIK = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rTarget, "right", rElbowHint);
-      const lIK = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lTarget, "left",  lElbowHint);
+      // Ghost interpolation: detect wrist teleportation and hold last known pos
+      if (ghostInterpolationEnabled) {
+        if (rWrist) {
+          const rPos: [number, number, number] = [rWrist.px, rWrist.py, rWrist.pz];
+          if (detectTeleport(lastGoodRWrist, rPos)) {
+            rTarget = lastGoodRWrist ?? rTarget;
+            rElbowHint = undefined;
+            rGhostCount++;
+          } else {
+            lastGoodRWrist = rPos;
+          }
+        }
+        if (lWrist) {
+          const lPos: [number, number, number] = [lWrist.px, lWrist.py, lWrist.pz];
+          if (detectTeleport(lastGoodLWrist, lPos)) {
+            lTarget = lastGoodLWrist ?? lTarget;
+            lElbowHint = undefined;
+            lGhostCount++;
+          } else {
+            lastGoodLWrist = lPos;
+          }
+        }
+      }
 
+      const prevResult = results[results.length - 1];
+      const rPrev = prevResult
+        ? { shoulder1: prevResult.arms.rShoulder1, shoulder2: prevResult.arms.rShoulder2, elbow: prevResult.arms.rElbow }
+        : undefined;
+      const lPrev = prevResult
+        ? { shoulder1: prevResult.arms.lShoulder1, shoulder2: prevResult.arms.lShoulder2, elbow: prevResult.arms.lElbow }
+        : undefined;
+
+      const rIK = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rTarget, "right", rElbowHint, rPrev);
+      const lIK = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lTarget, "left",  lElbowHint, lPrev);
+
+      const prev = prevResult?.arms;
       results.push({
         frameIndex: frame.index,
         torsoPos,
         torsoQuat,
         arms: {
-          rShoulder1: rIK.shoulder1,
-          rShoulder2: rIK.shoulder2,
-          rElbow:     rIK.elbow,
+          rShoulder1: prev ? smoothAngle(rIK.shoulder1, prev.rShoulder1) : rIK.shoulder1,
+          rShoulder2: prev ? smoothAngle(rIK.shoulder2, prev.rShoulder2) : rIK.shoulder2,
+          rElbow:     prev ? smoothAngle(rIK.elbow,     prev.rElbow)     : rIK.elbow,
           rReachable: rIK.reachable,
-          lShoulder1: lIK.shoulder1,
-          lShoulder2: lIK.shoulder2,
-          lElbow:     lIK.elbow,
+          lShoulder1: prev ? smoothAngle(lIK.shoulder1, prev.lShoulder1) : lIK.shoulder1,
+          lShoulder2: prev ? smoothAngle(lIK.shoulder2, prev.lShoulder2) : lIK.shoulder2,
+          lElbow:     prev ? smoothAngle(lIK.elbow,     prev.lElbow)     : lIK.elbow,
           lReachable: lIK.reachable,
         },
       });
@@ -195,7 +251,7 @@ export function computeHumanoidIKBackground(
     if (!cancelled && solved < total) {
       setTimeout(processBatch, 0);
     } else if (!cancelled) {
-      onComplete(results);
+      onComplete(results, { rightGhostCount: rGhostCount, leftGhostCount: lGhostCount });
     }
   }
 

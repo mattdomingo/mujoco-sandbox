@@ -55,6 +55,7 @@ const _d           = new THREE.Vector3();
 const _dNorm       = new THREE.Vector3();
 const _hint        = new THREE.Vector3();
 const _torsoRight  = new THREE.Vector3();
+const _torsoFwdScratch = new THREE.Vector3();
 const _n           = new THREE.Vector3();
 const _eOut        = new THREE.Vector3();
 const _elbowWorld  = new THREE.Vector3();
@@ -94,7 +95,8 @@ export function solveArmIK(
   shoulderLocalPos: [number, number, number],
   wristTargetWorld: [number, number, number],
   side: "right" | "left",
-  elbowHintWorld?: [number, number, number]
+  elbowHintWorld?: [number, number, number],
+  prevAngles?: { shoulder1: number; shoulder2: number; elbow: number }
 ): ArmIKResult {
   const U = UPPER_ARM_LEN;
   const L = LOWER_ARM_LEN;
@@ -140,21 +142,18 @@ export function solveArmIK(
     _elbowOnPlane.addScaledVector(_dNorm, -alongAxis);
 
     if (_elbowOnPlane.lengthSq() < 1e-6) {
-      // Hint is exactly on the reach line — fall back to pole vector
-      _hint.set(0, -1, 0);
-      _torsoRight.set(0, -1, 0).applyQuaternion(_torsoQuat);
-      const outSign = side === "right" ? 1 : -1;
-      _hint.addScaledVector(_torsoRight, 0.5 * outSign).normalize();
+      // Hint is exactly on the reach line — fall back to anatomical pole vector
+      const _torsoFwd = _torsoFwdScratch.set(1, 0, 0).applyQuaternion(_torsoQuat);
+      _hint.set(0, -1, 0).addScaledVector(_torsoFwd, -0.2).normalize();
     } else {
       _elbowOnPlane.normalize();
       _hint.copy(_elbowOnPlane);
     }
   } else {
-    // Fallback: anatomical pole-vector — primarily downward, biased outward.
-    _torsoRight.set(0, -1, 0).applyQuaternion(_torsoQuat);
-    _hint.set(0, -1, 0);
-    const outSign = side === "right" ? 1 : -1;
-    _hint.addScaledVector(_torsoRight, 0.5 * outSign).normalize();
+    // Fallback: anatomical pole-vector — down and slightly behind torso.
+    // This matches real elbow-drop anatomy better than biasing outward.
+    const _torsoFwd = _torsoFwdScratch.set(1, 0, 0).applyQuaternion(_torsoQuat);
+    _hint.set(0, -1, 0).addScaledVector(_torsoFwd, -0.2).normalize();
 
     if (Math.abs(_hint.dot(_dNorm)) > 0.99) {
       // Degenerate: arm along hint — use torso back
@@ -206,6 +205,12 @@ export function solveArmIK(
     _q1.set(nx, ny, nz, nw);
   }
 
+  // Temporal disambiguation: pick the sign of shoulder1 that minimises delta from prev
+  if (prevAngles && Math.abs(-shoulder1 - prevAngles.shoulder1) < Math.abs(shoulder1 - prevAngles.shoulder1)) {
+    shoulder1 = -shoulder1;
+    _q1.set(-_q1.x, -_q1.y, -_q1.z, _q1.w);
+  }
+
   const swingRemain = _q1.clone().invert().multiply(_swingQuat);
 
   // Shoulder2 after shoulder1
@@ -222,6 +227,11 @@ export function solveArmIK(
       r2w
     );
     if (dot2 < 0) shoulder2 = -shoulder2;
+  }
+
+  // Temporal disambiguation for shoulder2
+  if (prevAngles && Math.abs(-shoulder2 - prevAngles.shoulder2) < Math.abs(shoulder2 - prevAngles.shoulder2)) {
+    shoulder2 = -shoulder2;
   }
 
   const S_MIN = -85 * (Math.PI / 180);
