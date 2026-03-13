@@ -15,6 +15,7 @@ import {
   resizeRenderer,
   updatePressureBall,
   makeHumanoidScene,
+  setControlsDistance,
 } from "@/lib/three/scene";
 import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
@@ -35,6 +36,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const hasDevicePose = capture.frames.some(f => f.devicePose !== null);
   const [followHead, setFollowHead] = useState(hasDevicePose);
+
+  const ZOOM_MIN = 0.3;
+  const ZOOM_MAX = 15;
+  const [zoomDistance, setZoomDistance] = useState(3.0);
 
   // MuJoCo load status
   const [mujocoStage, setMujocoStage]     = useState<MuJoCoStage>("booting");
@@ -90,6 +95,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
         setBallContactCount(ballResult.contactCount);
         setHandPressure(handResult.pressure);
         setHandContactCount(handResult.contactCount);
+        if (!followHeadRef.current) {
+          setZoomDistance(threeRef.current.controls.getDistance());
+        }
       }
 
       renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current);
@@ -103,8 +111,11 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const handleToggle = useCallback(() => {
     setFollowHead(prev => {
       const next = !prev;
-      if (!next && threeRef.current) {
-        aimCameraAtCapture(threeRef.current, capture.frames);
+      if (threeRef.current) {
+        threeRef.current.controls.enabled = !next;
+        if (!next) {
+          aimCameraAtCapture(threeRef.current, capture.frames);
+        }
       }
       return next;
     });
@@ -121,6 +132,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     rafId = requestAnimationFrame(() => {
       three = initThreeScene(canvas);
       threeRef.current = three;
+
+      three.controls.enabled = !followHeadRef.current;
+      setZoomDistance(three.controls.getDistance());
 
       const frame0 = capture.frames[0];
       if (frame0?.devicePose && followHeadRef.current) {
@@ -274,6 +288,29 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             <span className="text-xs text-zinc-300 select-none w-16">
               {followHead ? "Follow head" : "Fixed"}
             </span>
+          </div>
+        )}
+
+        {/* Zoom slider — only shown in fixed camera mode */}
+        {!followHead && (
+          <div className="absolute flex flex-col items-center gap-1" style={{ top: "3.5rem", right: "0.75rem" }}>
+            <span className="text-[10px] text-zinc-500 select-none">+</span>
+            <input
+              type="range"
+              min={ZOOM_MIN}
+              max={ZOOM_MAX}
+              step={0.1}
+              value={ZOOM_MAX + ZOOM_MIN - zoomDistance}
+              onChange={(e) => {
+                const newDist = ZOOM_MAX + ZOOM_MIN - Number(e.target.value);
+                setZoomDistance(newDist);
+                if (threeRef.current) setControlsDistance(threeRef.current, newDist);
+              }}
+              className="accent-blue-500 cursor-pointer"
+              style={{ writingMode: "vertical-lr", direction: "rtl", height: "96px", width: "20px" }}
+              aria-label="Zoom"
+            />
+            <span className="text-[10px] text-zinc-500 select-none">−</span>
           </div>
         )}
 

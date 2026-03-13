@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import type { CaptureFrame } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
@@ -36,6 +37,7 @@ export interface ThreeScene {
   renderer: THREE.WebGLRenderer;
   scene:    THREE.Scene;
   camera:   THREE.PerspectiveCamera;
+  controls: OrbitControls;
   rightHand: HandScene;
   leftHand:  HandScene;
   pressureBall: THREE.Mesh;
@@ -163,6 +165,14 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   camera.position.set(0.1, 1.8, 3.2);
   camera.lookAt(0.1, 1.0, 0.5);
 
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance   = 0.3;
+  controls.maxDistance   = 15;
+  controls.target.set(0.1, 1.0, 0.5);
+  controls.update();
+
   const ambient = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambient);
   const directional = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -176,11 +186,12 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   const pressureBall = makePressureBall(scene);
 
   const dispose = () => {
+    controls.dispose();
     renderer.dispose();
     scene.clear();
   };
 
-  return { renderer, scene, camera, rightHand, leftHand, pressureBall, humanoid: null, dispose };
+  return { renderer, scene, camera, controls, rightHand, leftHand, pressureBall, humanoid: null, dispose };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +238,8 @@ export function aimCameraAtCapture(
   const dist = maxSpan * 1.6;
   camera.position.set(cx, cy + maxSpan * 0.3, cz + dist);
   camera.lookAt(cx, cy, cz);
+  threeScene.controls.target.set(cx, cy, cz);
+  threeScene.controls.update();
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +304,11 @@ function syncHandFromFrame(
 }
 
 export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
-  const { renderer, scene, camera, rightHand, leftHand } = threeScene;
+  const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
   const hideForarm = threeScene.humanoid !== null;
   syncHandFromFrame(rightHand, frame, "right", hideForarm);
   syncHandFromFrame(leftHand,  frame, "left",  hideForarm);
+  controls.update();
   renderer.render(scene, camera);
 }
 
@@ -493,11 +507,12 @@ export function renderFromMujoco(
   instance: MuJoCoInstance,
   readMode: MuJoCoReadMode = "mocap"
 ) {
-  const { renderer, scene, camera, rightHand, leftHand } = threeScene;
+  const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
   const hideForarm = threeScene.humanoid !== null;
   syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
   if (threeScene.humanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
+  controls.update();
   renderer.render(scene, camera);
 }
 
@@ -536,4 +551,13 @@ export function resizeRenderer(threeScene: ThreeScene, canvas: HTMLCanvasElement
   threeScene.renderer.setSize(w, h);
   threeScene.camera.aspect = w / h;
   threeScene.camera.updateProjectionMatrix();
+}
+
+export function setControlsDistance(threeScene: ThreeScene, dist: number) {
+  const { camera, controls } = threeScene;
+  const dir = new THREE.Vector3()
+    .subVectors(camera.position, controls.target)
+    .normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, dist);
+  controls.update();
 }
