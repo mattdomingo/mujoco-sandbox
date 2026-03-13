@@ -308,7 +308,7 @@ export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
   const hideForarm = threeScene.humanoid !== null;
   syncHandFromFrame(rightHand, frame, "right", hideForarm);
   syncHandFromFrame(leftHand,  frame, "left",  hideForarm);
-  controls.update();
+  if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }
 
@@ -512,7 +512,7 @@ export function renderFromMujoco(
   syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
   if (threeScene.humanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
-  controls.update();
+  if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }
 
