@@ -511,13 +511,14 @@ function renderHumanoidFromMujoco(
 export function renderFromMujoco(
   threeScene: ThreeScene,
   instance: MuJoCoInstance,
-  readMode: MuJoCoReadMode = "mocap"
+  readMode: MuJoCoReadMode = "mocap",
+  showHumanoid = true
 ) {
   const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
-  const hideForarm = threeScene.humanoid !== null;
+  const hideForarm = threeScene.humanoid !== null && showHumanoid;
   syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
-  if (threeScene.humanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
+  if (threeScene.humanoid && showHumanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
   if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }

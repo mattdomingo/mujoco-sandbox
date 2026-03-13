@@ -68,6 +68,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const humanoidFramesRef       = useRef<HumanoidFrame[] | null>(null);
   const ikCancelRef             = useRef<(() => void) | null>(null);
 
+  const [showHumanoid, setShowHumanoid] = useState(true);
+  const showHumanoidRef = useRef(true);
+  showHumanoidRef.current = showHumanoid;
+
   // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
@@ -100,13 +104,26 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
         }
       }
 
-      renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current);
+      renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current, showHumanoidRef.current);
     } else {
       renderFromFrame(threeRef.current, frame);
     }
   }, []);
 
   const [playbackState, playbackControls] = usePlayback(capture, onFrame);
+
+  const handleToggleHumanoid = useCallback(() => {
+    setShowHumanoid(prev => {
+      const next = !prev;
+      const h = threeRef.current?.humanoid;
+      if (h && !next) {
+        h.joints.forEach(m => { m.visible = false; });
+        h.bones.forEach(m =>  { m.visible = false; });
+      }
+      // When turning back on, the next render frame will restore visibility naturally
+      return next;
+    });
+  }, []);
 
   const handleToggle = useCallback(() => {
     setFollowHead(prev => {
@@ -262,34 +279,63 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           </div>
         )}
 
-        {/* Camera mode toggle */}
-        {hasDevicePose && (
-          <div className="absolute top-3 right-3 flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
-            <span className="text-xs text-zinc-400 select-none">Camera</span>
-            <button
-              onClick={handleToggle}
-              className={[
-                "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
-                "transition-colors duration-200 focus:outline-none",
-                followHead ? "bg-blue-500" : "bg-zinc-600",
-              ].join(" ")}
-              role="switch"
-              aria-checked={followHead}
-              title={followHead ? "Following head — click for fixed view" : "Fixed view — click to follow head"}
-            >
-              <span
+        {/* Top-right controls row */}
+        <div className="absolute top-3 right-3 flex items-center gap-2">
+          {/* Humanoid toggle — only shown when IK is ready */}
+          {ikStage === "ready" && (
+            <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+              <span className="text-xs text-zinc-400 select-none">Humanoid</span>
+              <button
+                onClick={handleToggleHumanoid}
                 className={[
-                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
-                  "transform transition duration-200",
-                  followHead ? "translate-x-4" : "translate-x-0",
+                  "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                  "transition-colors duration-200 focus:outline-none",
+                  showHumanoid ? "bg-blue-500" : "bg-zinc-600",
                 ].join(" ")}
-              />
-            </button>
-            <span className="text-xs text-zinc-300 select-none w-16">
-              {followHead ? "Follow head" : "Fixed"}
-            </span>
-          </div>
-        )}
+                role="switch"
+                aria-checked={showHumanoid}
+                title={showHumanoid ? "Humanoid visible — click to hide" : "Humanoid hidden — click to show"}
+              >
+                <span
+                  className={[
+                    "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                    "transform transition duration-200",
+                    showHumanoid ? "translate-x-4" : "translate-x-0",
+                  ].join(" ")}
+                />
+              </button>
+            </div>
+          )}
+
+          {/* Camera mode toggle */}
+          {hasDevicePose && (
+            <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+              <span className="text-xs text-zinc-400 select-none">Camera</span>
+              <button
+                onClick={handleToggle}
+                className={[
+                  "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                  "transition-colors duration-200 focus:outline-none",
+                  followHead ? "bg-blue-500" : "bg-zinc-600",
+                ].join(" ")}
+                role="switch"
+                aria-checked={followHead}
+                title={followHead ? "Following head — click for fixed view" : "Fixed view — click to follow head"}
+              >
+                <span
+                  className={[
+                    "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                    "transform transition duration-200",
+                    followHead ? "translate-x-4" : "translate-x-0",
+                  ].join(" ")}
+                />
+              </button>
+              <span className="text-xs text-zinc-300 select-none w-16">
+                {followHead ? "Follow head" : "Fixed"}
+              </span>
+            </div>
+          )}
+        </div>
 
         {/* Zoom slider — only shown in fixed camera mode */}
         {!followHead && (
