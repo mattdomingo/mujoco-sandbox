@@ -251,13 +251,19 @@ function updateBone(bone: THREE.Mesh, a: THREE.Vector3, b: THREE.Vector3) {
   bone.scale.set(1, length, 1);
 }
 
+// Index of the forearm bone ([25,24]) and the forearmArm joint (25).
+// When the humanoid is active these are hidden — the humanoid arm replaces them.
+const FOREARM_BONE_IDX  = BONE_PAIRS.length - 1; // index 24
+const FOREARM_ARM_JOINT = 25; // forearmArm joint index
+
 // ---------------------------------------------------------------------------
 // Sync hand meshes from a parsed CaptureFrame
 // ---------------------------------------------------------------------------
 function syncHandFromFrame(
   handScene: HandScene,
   frame: CaptureFrame,
-  chirality: "left" | "right"
+  chirality: "left" | "right",
+  hideForarm = false
 ) {
   const hand = chirality === "right" ? frame.rightHand : frame.leftHand;
   if (!hand) {
@@ -270,18 +276,25 @@ function syncHandFromFrame(
     const p = hand[i];
     handScene.joints[i].position.set(p.px, p.py, p.pz);
   }
+  if (hideForarm) {
+    handScene.joints[FOREARM_ARM_JOINT].visible = false;
+  }
   for (let b = 0; b < BONE_PAIRS.length; b++) {
     const [ai, bi] = BONE_PAIRS[b];
     _posA.copy(handScene.joints[ai].position);
     _posB.copy(handScene.joints[bi].position);
     updateBone(handScene.bones[b], _posA, _posB);
   }
+  if (hideForarm) {
+    handScene.bones[FOREARM_BONE_IDX].visible = false;
+  }
 }
 
 export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
   const { renderer, scene, camera, rightHand, leftHand } = threeScene;
-  syncHandFromFrame(rightHand, frame, "right");
-  syncHandFromFrame(leftHand,  frame, "left");
+  const hideForarm = threeScene.humanoid !== null;
+  syncHandFromFrame(rightHand, frame, "right", hideForarm);
+  syncHandFromFrame(leftHand,  frame, "left",  hideForarm);
   renderer.render(scene, camera);
 }
 
@@ -296,7 +309,8 @@ function syncHandFromMujoco(
   handScene: HandScene,
   instance: MuJoCoInstance,
   prefix: string,
-  readMode: MuJoCoReadMode
+  readMode: MuJoCoReadMode,
+  hideForarm = false
 ) {
   const { data, mocapIndex, bodyIndex } = instance;
 
@@ -339,11 +353,19 @@ function syncHandFromMujoco(
     handScene.joints[i].visible = true;
   }
 
+  if (hideForarm) {
+    handScene.joints[FOREARM_ARM_JOINT].visible = false;
+  }
+
   for (let b = 0; b < BONE_PAIRS.length; b++) {
     const [ai, bi] = BONE_PAIRS[b];
     _posA.copy(handScene.joints[ai].position);
     _posB.copy(handScene.joints[bi].position);
     updateBone(handScene.bones[b], _posA, _posB);
+  }
+
+  if (hideForarm) {
+    handScene.bones[FOREARM_BONE_IDX].visible = false;
   }
 }
 
@@ -472,8 +494,9 @@ export function renderFromMujoco(
   readMode: MuJoCoReadMode = "mocap"
 ) {
   const { renderer, scene, camera, rightHand, leftHand } = threeScene;
-  syncHandFromMujoco(rightHand, instance, "r_", readMode);
-  syncHandFromMujoco(leftHand,  instance, "l_", readMode);
+  const hideForarm = threeScene.humanoid !== null;
+  syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
+  syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
   if (threeScene.humanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
   renderer.render(scene, camera);
 }
