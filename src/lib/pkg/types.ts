@@ -55,12 +55,19 @@ export interface DevicePose {
   qx: number; qy: number; qz: number; qw: number; // orientation
 }
 
+export interface ArmInputTracking {
+  wristTracked: boolean;
+  elbowHintTracked: boolean;
+}
+
 export interface CaptureFrame {
   index: number;
   timestamp: number;   // seconds since session start (t_mono)
   leftHand: HandPose | null;
   rightHand: HandPose | null;
   devicePose: DevicePose | null;  // headset pose at this timestamp (interpolated)
+  leftArmInput: ArmInputTracking;
+  rightArmInput: ArmInputTracking;
 }
 
 export interface ParsedCapture {
@@ -77,11 +84,13 @@ export interface HumanoidArmAngles {
   rShoulder2: number;
   rElbow: number;
   rReachable: boolean;
+  rTrackedDataValid: boolean;
   lShoulder1: number;
   lShoulder2: number;
   lElbow: number;
   lReachable: boolean;
-  // Violation flags — true when raw IK angle exceeded anatomical clamp
+  lTrackedDataValid: boolean;
+  // Debug flags — true when the raw solve exceeded anatomical clamp
   rShoulder1Clamped: boolean;
   rShoulder2Clamped: boolean;
   rElbowClamped: boolean;

@@ -26,7 +26,7 @@
  */
 
 import * as THREE from "three";
-import type { CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
+import type { ArmInputTracking, CaptureFrame, HumanoidFrame, JointPose } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL } from "./ik";
 
@@ -117,6 +117,89 @@ const baseWXYZ: [number, number, number, number] = [
   BASE_ROTATION.w, BASE_ROTATION.x, BASE_ROTATION.y, BASE_ROTATION.z,
 ];
 
+export interface ResolvedArmState {
+  shoulder1: number;
+  shoulder2: number;
+  elbow: number;
+  reachable: boolean;
+  trackedDataValid: boolean;
+  shoulder1Clamped: boolean;
+  shoulder2Clamped: boolean;
+  elbowClamped: boolean;
+}
+
+const NEUTRAL_ARM_STATE: ResolvedArmState = {
+  shoulder1: 0,
+  shoulder2: 0,
+  elbow: 0,
+  reachable: false,
+  trackedDataValid: false,
+  shoulder1Clamped: false,
+  shoulder2Clamped: false,
+  elbowClamped: false,
+};
+
+function freezeArmState(previous?: ResolvedArmState): ResolvedArmState {
+  const frozen = previous ?? NEUTRAL_ARM_STATE;
+  return {
+    shoulder1: frozen.shoulder1,
+    shoulder2: frozen.shoulder2,
+    elbow: frozen.elbow,
+    reachable: false,
+    trackedDataValid: false,
+    shoulder1Clamped: false,
+    shoulder2Clamped: false,
+    elbowClamped: false,
+  };
+}
+
+function poseToWorldTuple(pose: JointPose): [number, number, number] {
+  return [pose.px, pose.py, pose.pz];
+}
+
+export function resolveTrackedArmSide(
+  torsoPos: [number, number, number],
+  torsoQuat: [number, number, number, number],
+  shoulderLocalPos: [number, number, number],
+  wristPose: JointPose | null | undefined,
+  elbowHintPose: JointPose | null | undefined,
+  inputTracking: ArmInputTracking,
+  side: "right" | "left",
+  previous?: ResolvedArmState
+): ResolvedArmState {
+  const trackedDataValid =
+    inputTracking.wristTracked &&
+    inputTracking.elbowHintTracked &&
+    wristPose !== null &&
+    wristPose !== undefined &&
+    elbowHintPose !== null &&
+    elbowHintPose !== undefined;
+
+  if (!trackedDataValid) {
+    return freezeArmState(previous);
+  }
+
+  const ik = solveArmIK(
+    torsoPos,
+    torsoQuat,
+    shoulderLocalPos,
+    poseToWorldTuple(wristPose),
+    side,
+    poseToWorldTuple(elbowHintPose)
+  );
+
+  return {
+    shoulder1: previous ? smoothAngle(ik.shoulder1, previous.shoulder1) : ik.shoulder1,
+    shoulder2: previous ? smoothAngle(ik.shoulder2, previous.shoulder2) : ik.shoulder2,
+    elbow:     previous ? smoothAngle(ik.elbow,     previous.elbow)     : ik.elbow,
+    reachable: ik.reachable,
+    trackedDataValid: true,
+    shoulder1Clamped: ik.shoulder1Clamped,
+    shoulder2Clamped: ik.shoulder2Clamped,
+    elbowClamped: ik.elbowClamped,
+  };
+}
+
 export function computeHumanoidIKBackground(
   frames: CaptureFrame[],
   onProgress: (solved: number, total: number) => void,
@@ -125,6 +208,8 @@ export function computeHumanoidIKBackground(
   let cancelled = false;
   let solved = 0;
   const results: HumanoidFrame[] = [];
+  let prevRight: ResolvedArmState | undefined;
+  let prevLeft: ResolvedArmState | undefined;
   const total = frames.length;
 
   // Reference yaw from first frame that has device pose
@@ -150,54 +235,67 @@ export function computeHumanoidIKBackground(
         ? buildTorsoQuat(dp.qx, dp.qy, dp.qz, dp.qw, refYaw)
         : baseWXYZ;
 
-      // Wrist targets from AVP forearmWrist (index 24)
-      const rWrist = frame.rightHand?.[WRIST_IDX];
-      const lWrist = frame.leftHand?.[WRIST_IDX];
+      // Arm-driving inputs come only from tracked forearmWrist + forearmArm.
+      // Interpolated hand poses still render, but they do not drive humanoid IK.
+      const rWrist = frame.rightHand?.[WRIST_IDX] ?? null;
+      const lWrist = frame.leftHand?.[WRIST_IDX] ?? null;
+      const rForearm = frame.rightHand?.[FOREARM_IDX] ?? null;
+      const lForearm = frame.leftHand?.[FOREARM_IDX] ?? null;
 
-      const rTarget: [number, number, number] = rWrist
-        ? [rWrist.px, rWrist.py, rWrist.pz]
-        : [torsoPos[0] + 0.4, torsoPos[1] - 0.2, torsoPos[2]];
+      const rInput = frame.rightArmInput ?? {
+        wristTracked: rWrist !== null,
+        elbowHintTracked: rForearm !== null,
+      };
+      const lInput = frame.leftArmInput ?? {
+        wristTracked: lWrist !== null,
+        elbowHintTracked: lForearm !== null,
+      };
 
-      const lTarget: [number, number, number] = lWrist
-        ? [lWrist.px, lWrist.py, lWrist.pz]
-        : [torsoPos[0] - 0.4, torsoPos[1] - 0.2, torsoPos[2]];
+      const rResolved = resolveTrackedArmSide(
+        torsoPos,
+        torsoQuat,
+        R_SHOULDER_LOCAL,
+        rWrist,
+        rForearm,
+        rInput,
+        "right",
+        prevRight
+      );
+      const lResolved = resolveTrackedArmSide(
+        torsoPos,
+        torsoQuat,
+        L_SHOULDER_LOCAL,
+        lWrist,
+        lForearm,
+        lInput,
+        "left",
+        prevLeft
+      );
 
-      // Elbow hints from AVP forearmArm (index 25) — real measured elbow region.
-      // When present this drives the elbow direction from actual data.
-      const rForearm = frame.rightHand?.[FOREARM_IDX];
-      const lForearm = frame.leftHand?.[FOREARM_IDX];
+      prevRight = rResolved;
+      prevLeft = lResolved;
 
-      const rElbowHint: [number, number, number] | undefined = rForearm
-        ? [rForearm.px, rForearm.py, rForearm.pz]
-        : undefined;
-
-      const lElbowHint: [number, number, number] | undefined = lForearm
-        ? [lForearm.px, lForearm.py, lForearm.pz]
-        : undefined;
-
-      const rIK = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rTarget, "right", rElbowHint);
-      const lIK = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lTarget, "left",  lElbowHint);
-
-      const prev = results[results.length - 1]?.arms;
       results.push({
         frameIndex: frame.index,
         torsoPos,
         torsoQuat,
         arms: {
-          rShoulder1: prev ? smoothAngle(rIK.shoulder1, prev.rShoulder1) : rIK.shoulder1,
-          rShoulder2: prev ? smoothAngle(rIK.shoulder2, prev.rShoulder2) : rIK.shoulder2,
-          rElbow:     prev ? smoothAngle(rIK.elbow,     prev.rElbow)     : rIK.elbow,
-          rReachable: rIK.reachable,
-          lShoulder1: prev ? smoothAngle(lIK.shoulder1, prev.lShoulder1) : lIK.shoulder1,
-          lShoulder2: prev ? smoothAngle(lIK.shoulder2, prev.lShoulder2) : lIK.shoulder2,
-          lElbow:     prev ? smoothAngle(lIK.elbow,     prev.lElbow)     : lIK.elbow,
-          lReachable: lIK.reachable,
-          rShoulder1Clamped: rIK.shoulder1Clamped,
-          rShoulder2Clamped: rIK.shoulder2Clamped,
-          rElbowClamped:     rIK.elbowClamped,
-          lShoulder1Clamped: lIK.shoulder1Clamped,
-          lShoulder2Clamped: lIK.shoulder2Clamped,
-          lElbowClamped:     lIK.elbowClamped,
+          rShoulder1: rResolved.shoulder1,
+          rShoulder2: rResolved.shoulder2,
+          rElbow:     rResolved.elbow,
+          rReachable: rResolved.reachable,
+          rTrackedDataValid: rResolved.trackedDataValid,
+          lShoulder1: lResolved.shoulder1,
+          lShoulder2: lResolved.shoulder2,
+          lElbow:     lResolved.elbow,
+          lReachable: lResolved.reachable,
+          lTrackedDataValid: lResolved.trackedDataValid,
+          rShoulder1Clamped: rResolved.shoulder1Clamped,
+          rShoulder2Clamped: rResolved.shoulder2Clamped,
+          rElbowClamped:     rResolved.elbowClamped,
+          lShoulder1Clamped: lResolved.shoulder1Clamped,
+          lShoulder2Clamped: lResolved.shoulder2Clamped,
+          lElbowClamped:     lResolved.elbowClamped,
         },
       });
     }

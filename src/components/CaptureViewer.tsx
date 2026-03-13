@@ -101,10 +101,14 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       const violatedBodies = new Set<string>();
       if (humanoidFrame) {
         const a = humanoidFrame.arms;
-        if (a.rShoulder1Clamped || a.rShoulder2Clamped) violatedBodies.add("upper_arm_right");
-        if (a.rElbowClamped)                              violatedBodies.add("lower_arm_right");
-        if (a.lShoulder1Clamped || a.lShoulder2Clamped) violatedBodies.add("upper_arm_left");
-        if (a.lElbowClamped)                              violatedBodies.add("lower_arm_left");
+        if (!a.rTrackedDataValid) {
+          violatedBodies.add("upper_arm_right");
+          violatedBodies.add("lower_arm_right");
+        }
+        if (!a.lTrackedDataValid) {
+          violatedBodies.add("upper_arm_left");
+          violatedBodies.add("lower_arm_left");
+        }
       }
 
       // Read MuJoCo contact forces and update the ball mesh every frame.

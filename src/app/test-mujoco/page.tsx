@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { loadMuJoCo, applyFrame, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
+import { resolveTrackedArmSide } from "@/lib/mujoco/humanoidIk";
 
 declare global {
   interface Window {
@@ -22,6 +23,7 @@ declare global {
       applyFrame: typeof applyFrame;
       readContactPressure: typeof readContactPressure;
       readInterHandPressure: typeof readInterHandPressure;
+      resolveTrackedArmSide: typeof resolveTrackedArmSide;
     };
   }
 }
@@ -39,6 +41,7 @@ export default function MuJoCoTestPage() {
           applyFrame,
           readContactPressure,
           readInterHandPressure,
+          resolveTrackedArmSide,
         };
         setStatus("ready");
         setDetail(

@@ -194,6 +194,8 @@ test("applyFrame writes all 26 right-hand joints and mj_forward reflects them in
       rightHand: hand,
       leftHand: null,
       devicePose: null,
+      rightArmInput: { wristTracked: true, elbowHintTracked: true },
+      leftArmInput: { wristTracked: false, elbowHintTracked: false },
     };
 
     applyFrame(instance, frame);
@@ -387,6 +389,8 @@ test("readContactPressure returns zero when hands are far from the ball", async 
       index: 0, timestamp: 0,
       rightHand: farHand, leftHand: farHand,
       devicePose: null,
+      rightArmInput: { wristTracked: true, elbowHintTracked: true },
+      leftArmInput: { wristTracked: true, elbowHintTracked: true },
     });
 
     const { pressure, contactCount } = readContactPressure(instance);
@@ -421,6 +425,8 @@ test("readContactPressure returns non-zero pressure when a hand joint overlaps t
       index: 0, timestamp: 0,
       rightHand: onBallHand, leftHand: farHand,
       devicePose: null,
+      rightArmInput: { wristTracked: true, elbowHintTracked: true },
+      leftArmInput: { wristTracked: true, elbowHintTracked: true },
     });
 
     const { pressure, contactCount, ballPos } = readContactPressure(instance);
@@ -452,6 +458,8 @@ test("readInterHandPressure returns zero when hands are far apart", async ({ pag
       index: 0, timestamp: 0,
       rightHand: farRightHand, leftHand: farLeftHand,
       devicePose: null,
+      rightArmInput: { wristTracked: true, elbowHintTracked: true },
+      leftArmInput: { wristTracked: true, elbowHintTracked: true },
     });
 
     return readInterHandPressure(instance);
@@ -487,6 +495,8 @@ test("readInterHandPressure returns non-zero pressure when left and right joints
       index: 0, timestamp: 0,
       rightHand: farRightHand, leftHand: farLeftHand,
       devicePose: null,
+      rightArmInput: { wristTracked: true, elbowHintTracked: true },
+      leftArmInput: { wristTracked: true, elbowHintTracked: true },
     });
 
     return readInterHandPressure(instance);
@@ -494,4 +504,147 @@ test("readInterHandPressure returns non-zero pressure when left and right joints
 
   expect(result.contactCount, "at least one inter-hand contact should be detected").toBeGreaterThan(0);
   expect(result.pressure, "inter-hand pressure should be > 0 when left/right joints overlap").toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 14 — arm resolve freezes to the last valid pose when tracking gaps occur
+// ---------------------------------------------------------------------------
+test("resolveTrackedArmSide freezes the last valid pose when wrist or elbow data is not tracked", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { resolveTrackedArmSide } = window.__mujocoTest!;
+    const torsoPos: [number, number, number] = [0, 0, 0];
+    const torsoQuat: [number, number, number, number] = [1, 0, 0, 0];
+    const shoulderLocal: [number, number, number] = [0, -0.17, 0.06];
+    const wrist = { px: 0.32, py: -0.24, pz: -0.06, qx: 0, qy: 0, qz: 0, qw: 1 };
+    const elbow = { px: 0.16, py: -0.30, pz: -0.12, qx: 0, qy: 0, qz: 0, qw: 1 };
+
+    const valid = resolveTrackedArmSide(
+      torsoPos,
+      torsoQuat,
+      shoulderLocal,
+      wrist,
+      elbow,
+      { wristTracked: true, elbowHintTracked: true },
+      "right"
+    );
+    const frozen = resolveTrackedArmSide(
+      torsoPos,
+      torsoQuat,
+      shoulderLocal,
+      wrist,
+      elbow,
+      { wristTracked: false, elbowHintTracked: false },
+      "right",
+      valid
+    );
+
+    return {
+      validTracked: valid.trackedDataValid,
+      frozenTracked: frozen.trackedDataValid,
+      sameShoulder1: frozen.shoulder1 === valid.shoulder1,
+      sameShoulder2: frozen.shoulder2 === valid.shoulder2,
+      sameElbow: frozen.elbow === valid.elbow,
+      frozenReachable: frozen.reachable,
+      clampFlags: [frozen.shoulder1Clamped, frozen.shoulder2Clamped, frozen.elbowClamped],
+    };
+  });
+
+  expect(result.validTracked, "valid tracked data should produce a tracked solve").toBe(true);
+  expect(result.frozenTracked, "gap frames should be marked invalid").toBe(false);
+  expect(result.sameShoulder1, "gap frame should freeze shoulder1").toBe(true);
+  expect(result.sameShoulder2, "gap frame should freeze shoulder2").toBe(true);
+  expect(result.sameElbow, "gap frame should freeze elbow").toBe(true);
+  expect(result.frozenReachable, "frozen gap frame should not report a fresh solve").toBe(false);
+  expect(result.clampFlags, "frozen gap frame should clear clamp/debug flags").toEqual([false, false, false]);
+});
+
+// ---------------------------------------------------------------------------
+// Test 15 — leading tracking gaps fall back to the neutral arm pose
+// ---------------------------------------------------------------------------
+test("resolveTrackedArmSide uses the neutral arm pose before any valid tracked sample exists", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { resolveTrackedArmSide } = window.__mujocoTest!;
+    return resolveTrackedArmSide(
+      [0, 0, 0],
+      [1, 0, 0, 0],
+      [0, 0.17, 0.06],
+      null,
+      null,
+      { wristTracked: false, elbowHintTracked: false },
+      "left"
+    );
+  });
+
+  expect(result.trackedDataValid, "leading gap should be marked invalid").toBe(false);
+  expect(result.shoulder1, "leading gap shoulder1 should stay at neutral").toBe(0);
+  expect(result.shoulder2, "leading gap shoulder2 should stay at neutral").toBe(0);
+  expect(result.elbow, "leading gap elbow should stay at neutral").toBe(0);
+  expect(result.reachable, "leading gap should not report reachability").toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Test 16 — solving resumes when tracked arm data returns after a gap
+// ---------------------------------------------------------------------------
+test("resolveTrackedArmSide resumes solving when tracked wrist and elbow data return", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { resolveTrackedArmSide } = window.__mujocoTest!;
+    const torsoPos: [number, number, number] = [0, 0, 0];
+    const torsoQuat: [number, number, number, number] = [1, 0, 0, 0];
+    const shoulderLocal: [number, number, number] = [0, -0.17, 0.06];
+    const wristA = { px: 0.32, py: -0.24, pz: -0.06, qx: 0, qy: 0, qz: 0, qw: 1 };
+    const elbowA = { px: 0.16, py: -0.30, pz: -0.12, qx: 0, qy: 0, qz: 0, qw: 1 };
+    const wristB = { px: 0.08, py: -0.52, pz: 0.22, qx: 0, qy: 0, qz: 0, qw: 1 };
+    const elbowB = { px: 0.02, py: -0.34, pz: 0.12, qx: 0, qy: 0, qz: 0, qw: 1 };
+
+    const valid = resolveTrackedArmSide(
+      torsoPos,
+      torsoQuat,
+      shoulderLocal,
+      wristA,
+      elbowA,
+      { wristTracked: true, elbowHintTracked: true },
+      "right"
+    );
+    const frozen = resolveTrackedArmSide(
+      torsoPos,
+      torsoQuat,
+      shoulderLocal,
+      wristA,
+      elbowA,
+      { wristTracked: false, elbowHintTracked: false },
+      "right",
+      valid
+    );
+    const resumed = resolveTrackedArmSide(
+      torsoPos,
+      torsoQuat,
+      shoulderLocal,
+      wristB,
+      elbowB,
+      { wristTracked: true, elbowHintTracked: true },
+      "right",
+      frozen
+    );
+
+    const changed =
+      Math.abs(resumed.shoulder1 - frozen.shoulder1) > 1e-4 ||
+      Math.abs(resumed.shoulder2 - frozen.shoulder2) > 1e-4 ||
+      Math.abs(resumed.elbow - frozen.elbow) > 1e-4;
+
+    return {
+      resumedTracked: resumed.trackedDataValid,
+      changed,
+      resumedReachable: resumed.reachable,
+    };
+  });
+
+  expect(result.resumedTracked, "tracked data returning should clear the gap flag").toBe(true);
+  expect(result.changed, "a resumed solve should update at least one joint angle").toBe(true);
+  expect(typeof result.resumedReachable, "resumed solve should report reachability").toBe("boolean");
 });

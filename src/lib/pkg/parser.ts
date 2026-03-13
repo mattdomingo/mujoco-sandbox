@@ -1,4 +1,4 @@
-import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose } from "./types";
+import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose, ArmInputTracking } from "./types";
 import { HAND_JOINT_NAMES, JOINT_COUNT } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -158,6 +158,16 @@ function lerpHandPose(a: HandPose, b: HandPose, t: number): HandPose {
   return a.map((joint, i) => lerpJoint(joint, b[i], t));
 }
 
+function buildArmInputTracking(poses: (HandPose | null)[]): ArmInputTracking[] {
+  return poses.map((hand) => {
+    const tracked = hand !== null;
+    return {
+      wristTracked: tracked,
+      elbowHintTracked: tracked,
+    };
+  });
+}
+
 /**
  * Fill gaps in a sparse array of hand poses using linear interpolation.
  * Entries that are null represent frames where tracking was lost.
@@ -256,6 +266,8 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   // gaps so hands move smoothly through tracking drop-outs instead of freezing.
   const rawLeft:  (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.left);
   const rawRight: (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.right);
+  const leftArmInput = buildArmInputTracking(rawLeft);
+  const rightArmInput = buildArmInputTracking(rawRight);
   const { result: interpLeft,  stats: leftStats  } = interpolateHandPoses(rawLeft);
   const { result: interpRight, stats: rightStats } = interpolateHandPoses(rawRight);
 
@@ -275,6 +287,8 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
     leftHand:  interpLeft[idx],
     rightHand: interpRight[idx],
     devicePose: devicePoses[idx],
+    leftArmInput: leftArmInput[idx],
+    rightArmInput: rightArmInput[idx],
   }));
 
   const frameRate = frames.length > 1
