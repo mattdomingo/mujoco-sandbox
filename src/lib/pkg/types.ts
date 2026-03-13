@@ -68,6 +68,7 @@ export interface ParsedCapture {
   frames: CaptureFrame[];
   audio: Blob | null;
   transcript: string | null;
+  video: File | null;   // camera_left.mov
 }
 
 // IK-solved hinge angles for both arms of the humanoid (radians).

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import type { ParsedCapture, CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
+import { useVideoSync } from "@/hooks/useVideoSync";
+import type { VideoSyncControls } from "@/hooks/useVideoSync";
 import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
 import { computeHumanoidIKBackground } from "@/lib/mujoco/humanoidIk";
@@ -68,6 +70,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const humanoidFramesRef       = useRef<HumanoidFrame[] | null>(null);
   const ikCancelRef             = useRef<(() => void) | null>(null);
 
+  const [showVideoPopup, setShowVideoPopup] = useState(false);
+  const videoRef     = useRef<HTMLVideoElement | null>(null);
+  const videoSyncRef = useRef<VideoSyncControls | null>(null);
+
   const [showHumanoid, setShowHumanoid] = useState(true);
   const showHumanoidRef = useRef(true);
   showHumanoidRef.current = showHumanoid;
@@ -76,8 +82,14 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
 
+  const frameRateRef = useRef(capture.metadata.frameRate);
+  frameRateRef.current = capture.metadata.frameRate;
+
   const onFrame = useCallback((frame: CaptureFrame) => {
     if (!threeRef.current) return;
+
+    // Drift-correct the video every tick (no-op if no video)
+    videoSyncRef.current?.onTick(frame, frameRateRef.current);
 
     if (followHeadRef.current && frame.devicePose) {
       applyCameraFromDevicePose(threeRef.current, frame);
@@ -110,7 +122,44 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     }
   }, []);
 
-  const [playbackState, playbackControls] = usePlayback(capture, onFrame);
+  const [playbackState, rawPlaybackControls] = usePlayback(capture, onFrame);
+
+  // Bind video file to the <video> element via an Object URL
+  useEffect(() => {
+    if (!videoRef.current || !capture.video) return;
+    const url = URL.createObjectURL(capture.video);
+    videoRef.current.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [capture.video]);
+
+  // Wire up ref-based video sync (no React state in the hot path)
+  const videoSync = useVideoSync(videoRef);
+  videoSyncRef.current = videoSync;
+
+  // Wrap playback controls to inject video sync on play/pause/seek
+  const handlePlay = useCallback(() => {
+    rawPlaybackControls.play();
+    const frame = capture.frames[playbackState.frameIndex];
+    if (frame) videoSyncRef.current?.onPlay(frame, capture.metadata.frameRate);
+  }, [rawPlaybackControls, capture, playbackState.frameIndex]);
+
+  const handlePause = useCallback(() => {
+    rawPlaybackControls.pause();
+    videoSyncRef.current?.onPause();
+  }, [rawPlaybackControls]);
+
+  const handleSeek = useCallback((index: number) => {
+    rawPlaybackControls.seek(index);
+    const frame = capture.frames[index];
+    if (frame) videoSyncRef.current?.onSeek(frame, capture.metadata.frameRate);
+  }, [rawPlaybackControls, capture]);
+
+  const playbackControls = {
+    ...rawPlaybackControls,
+    play:  handlePlay,
+    pause: handlePause,
+    seek:  handleSeek,
+  };
 
   const handleToggleHumanoid = useCallback(() => {
     setShowHumanoid(prev => {
@@ -357,6 +406,43 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
               aria-label="Zoom"
             />
             <span className="text-[10px] text-zinc-500 select-none">−</span>
+          </div>
+        )}
+
+        {/* camera_left video toggle button */}
+        {capture.video && (
+          <button
+            onClick={() => setShowVideoPopup(v => !v)}
+            className="absolute bottom-3 left-3 text-xs bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
+          >
+            camera_left
+          </button>
+        )}
+
+        {/* camera_left floating video panel — always mounted so videoRef stays valid;
+            hidden via CSS when popup is closed */}
+        {capture.video && (
+          <div className={[
+            "absolute bottom-12 left-3 bg-zinc-900/90 backdrop-blur-sm border border-zinc-700 rounded-lg overflow-hidden shadow-xl",
+            showVideoPopup ? "" : "hidden",
+          ].join(" ")}>
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-700">
+              <span className="text-xs text-zinc-400 font-mono">camera_left</span>
+              <button
+                onClick={() => setShowVideoPopup(false)}
+                className="text-zinc-500 hover:text-white text-sm leading-none ml-4"
+                aria-label="Close video"
+              >
+                ×
+              </button>
+            </div>
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              preload="auto"
+              className="block w-72"
+            />
           </div>
         )}
 

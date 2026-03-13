@@ -213,10 +213,14 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
     } catch { /* ignore malformed transcript */ }
   }
 
+  // video/camera_left.mov — optional
+  const videoFile = findFile(files, "video/camera_left.mov");
+
   return {
     metadata: { filename, duration, frameRate: Math.round(frameRate), frameCount: frames.length },
     frames,
     audio,
     transcript,
+    video: videoFile ?? null,
   };
 }
