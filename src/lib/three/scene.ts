@@ -173,6 +173,12 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   controls.target.set(0.1, 1.0, 0.5);
   controls.update();
 
+  // Re-render on every OrbitControls interaction so the view stays live when
+  // playback is paused (the rAF loop is stopped, so nothing else triggers renders).
+  controls.addEventListener("change", () => {
+    renderer.render(scene, camera);
+  });
+
   const ambient = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambient);
   const directional = new THREE.DirectionalLight(0xffffff, 1.2);
