@@ -6,11 +6,55 @@
  * in the background.
  */
 
+import * as THREE from "three";
 import type { CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL } from "./ik";
 
 const BATCH_SIZE = 50;
+
+// Reusable scratch objects for yaw extraction
+const _headQuat  = new THREE.Quaternion();
+const _forward   = new THREE.Vector3();
+const _yawQuat   = new THREE.Quaternion();
+
+// The MuJoCo humanoid is defined in Z-up space (gravity = -Z). The AVP/Three.js
+// world is Y-up. To make the humanoid stand upright in the Y-up world we must
+// rotate it -90° around X so its Z-up "standing" pose maps to Y-up "standing".
+// This base rotation is composed with the yaw every frame.
+const _zUpToYUp = new THREE.Quaternion().setFromAxisAngle(
+  new THREE.Vector3(1, 0, 0),
+  -Math.PI / 2
+);
+
+/**
+ * Build a torso quaternion (wxyz for MuJoCo) that:
+ *   1. Rotates the Z-up humanoid to stand upright in the Y-up world.
+ *   2. Applies only the yaw component of the head orientation (no pitch/roll).
+ */
+function buildTorsoQuat(
+  qx: number, qy: number, qz: number, qw: number
+): [number, number, number, number] {
+  // THREE uses xyzw
+  _headQuat.set(qx, qy, qz, qw).normalize();
+
+  // Project head forward onto horizontal plane to extract yaw only
+  _forward.set(0, 0, -1).applyQuaternion(_headQuat);
+  _forward.y = 0;
+  if (_forward.lengthSq() < 1e-6) {
+    // Degenerate (looking straight up/down): no yaw rotation
+    _yawQuat.identity();
+  } else {
+    _forward.normalize();
+    _yawQuat.setFromUnitVectors(new THREE.Vector3(0, 0, -1), _forward);
+  }
+
+  // Compose: first bring Z-up→Y-up, then apply yaw in Y-up space
+  const result = _yawQuat.clone().multiply(_zUpToYUp);
+
+  // Return as wxyz for MuJoCo
+  return [result.w, result.x, result.y, result.z];
+}
 
 // forearmWrist is at index 24 in HAND_JOINT_NAMES
 const WRIST_IDX = HAND_JOINT_NAMES.indexOf("forearmWrist");
@@ -44,10 +88,10 @@ export function computeHumanoidIKBackground(
         ? [dp.x, dp.y - 0.25, dp.z]
         : [0, 1.0, 0];
 
-      // Convert device pose quat xyzw → wxyz for MuJoCo
+      // Torso orientation: Z-up→Y-up correction + yaw only (no pitch/roll)
       const torsoQuat: [number, number, number, number] = dp
-        ? [dp.qw, dp.qx, dp.qy, dp.qz]
-        : [1, 0, 0, 0];
+        ? buildTorsoQuat(dp.qx, dp.qy, dp.qz, dp.qw)
+        : [_zUpToYUp.w, _zUpToYUp.x, _zUpToYUp.y, _zUpToYUp.z];
 
       const rWrist = frame.rightHand?.[WRIST_IDX];
       const lWrist = frame.leftHand?.[WRIST_IDX];
