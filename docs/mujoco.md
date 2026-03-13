@@ -54,3 +54,41 @@ Apple Vision Pro outputs quaternions as `(x, y, z, w)`.
 MuJoCo expects `(w, x, y, z)`.
 
 This is handled in `applyFrame()` in `loader.ts` — the reordering happens there before writing into `data.mocap_quat`.
+
+---
+
+## What MuJoCo can and cannot do
+
+### What it can do
+
+| Capability | How it's used here |
+|---|---|
+| **Physics simulation** — rigid body dynamics, gravity, collision response | `mj_forward()` called every frame to resolve contacts |
+| **Mocap bodies** — kinematically driven bodies that bypass the solver | All 52 hand joints driven from AVP CSV data |
+| **Contact detection** — detects when geoms intersect | Ball ↔ hand and hand ↔ hand contacts |
+| **Contact forces** — computes constraint forces at contact points | Pressure readout (Newtons) displayed in the HUD |
+| **Body Jacobians** — `mj_jac()` maps joint velocities ↔ end-effector velocities | Not used here, but available as a building block |
+| **Forward kinematics** — given joint angles, compute world positions of all bodies | Used implicitly: writing `qpos` hinge values and calling `mj_forward()` places humanoid limbs correctly |
+
+### What it cannot do
+
+**MuJoCo has no built-in inverse kinematics solver.** This is a deliberate design decision, stated explicitly in the [official docs](https://mujoco.readthedocs.io/en/stable/programming/simulation.html):
+
+> *"The opposite mapping [from Cartesian positions back to joint angles] is called inverse kinematics but it is not uniquely defined and is not implemented in MuJoCo."*
+
+IK is "not uniquely defined" because for a given hand position there are infinitely many shoulder/elbow combinations that reach it — MuJoCo won't guess which one you want.
+
+What MuJoCo *does* provide (`mj_jac`, `mj_jacBody`) are the **Jacobian matrices** that form the mathematical foundation of iterative IK algorithms like damped least squares. But implementing that loop — and the matrix pseudo-inverse it requires — is left entirely to the user. The JS/WASM build used here doesn't include a matrix library, making iterative IK impractical.
+
+The Python bindings include a nonlinear least-squares solver that *can* be used for IK, but this is Python-only and not available in the browser WASM package.
+
+### Why we use analytical IK instead
+
+For this use case — **motion capture replay with known wrist targets and fixed segment lengths** — analytical IK is the correct approach:
+
+- **Closed-form**: one pass per frame, no iteration
+- **Exact**: produces the precise answer given the geometry, no convergence tolerance
+- **Elbow hint**: the AVP provides a real measured point near the elbow (`forearmArm`, joint 25), which pins down the otherwise-ambiguous elbow direction
+- **No external dependencies**: pure TypeScript math, runs in the browser without a matrix library
+
+The analytical solver lives in `src/lib/mujoco/ik.ts`. It uses the law of cosines to find the elbow bend angle, the AVP elbow hint to place the elbow in space, and swing-twist decomposition to extract the two shoulder hinge angles. See `docs/humanoid_model.md` for a full derivation.
