@@ -355,14 +355,14 @@ const HUMANOID_SEGMENT_PAIRS: [string, string][] = [
   // Spine
   ["torso", "waist_lower"],
   ["waist_lower", "pelvis"],
-  // Right arm
+  // Right arm: shoulder → elbow → AVP wrist
   ["torso", "upper_arm_right"],
   ["upper_arm_right", "lower_arm_right"],
-  ["lower_arm_right", "hand_right"],
-  // Left arm
+  ["lower_arm_right", "r_forearmWrist"],
+  // Left arm: shoulder → elbow → AVP wrist
   ["torso", "upper_arm_left"],
   ["upper_arm_left", "lower_arm_left"],
-  ["lower_arm_left", "hand_left"],
+  ["lower_arm_left", "l_forearmWrist"],
   // Right leg
   ["pelvis", "thigh_right"],
   ["thigh_right", "shin_right"],
@@ -375,18 +375,32 @@ const HUMANOID_SEGMENT_PAIRS: [string, string][] = [
   ["torso", "head"],
 ];
 
-const HUMANOID_JOINT_NAMES = [
+// Humanoid MuJoCo bodies — positions read from data.xpos
+const HUMANOID_BODY_NAMES = [
   "torso", "head", "waist_lower", "pelvis",
-  "upper_arm_right", "lower_arm_right", "hand_right",
-  "upper_arm_left",  "lower_arm_left",  "hand_left",
+  "upper_arm_right", "lower_arm_right",
+  "upper_arm_left",  "lower_arm_left",
   "thigh_right", "shin_right", "foot_right",
   "thigh_left",  "shin_left",  "foot_left",
 ];
 
+// Mocap anchor names used as arm endpoints — positions read from data.mocap_pos
+const HUMANOID_MOCAP_ANCHORS = ["r_forearmWrist", "l_forearmWrist"];
+
 export function makeHumanoidScene(scene: THREE.Scene): HumanoidScene {
   const joints = new Map<string, THREE.Mesh>();
-  for (const name of HUMANOID_JOINT_NAMES) {
+  // Body joints (sphere markers at each body origin)
+  for (const name of HUMANOID_BODY_NAMES) {
     const geo = new THREE.SphereGeometry(0.04, 8, 8);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    joints.set(name, mesh);
+  }
+  // Mocap wrist anchors — slightly smaller spheres, same color
+  for (const name of HUMANOID_MOCAP_ANCHORS) {
+    const geo = new THREE.SphereGeometry(0.03, 8, 8);
     const mat = new THREE.MeshStandardMaterial({ color: 0x888888 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.visible = false;
@@ -412,10 +426,22 @@ function renderHumanoidFromMujoco(
   humanoidScene: HumanoidScene,
   instance: MuJoCoInstance
 ) {
-  const { data, humanoidBodyIds } = instance;
+  const { data, humanoidBodyIds, mocapIndex } = instance;
   const { joints, bones, segmentPairs } = humanoidScene;
 
   for (const [name, mesh] of joints) {
+    // Mocap anchor: read from mocap_pos
+    const mid = mocapIndex.get(name);
+    if (mid !== undefined) {
+      mesh.position.set(
+        data.mocap_pos[mid * 3 + 0],
+        data.mocap_pos[mid * 3 + 1],
+        data.mocap_pos[mid * 3 + 2]
+      );
+      mesh.visible = true;
+      continue;
+    }
+    // Humanoid dynamic body: read from xpos
     const bid = humanoidBodyIds.get(name);
     if (bid === undefined) { mesh.visible = false; continue; }
     mesh.position.set(
