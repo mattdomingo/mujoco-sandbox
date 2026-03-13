@@ -133,10 +133,14 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   // Wrap playback controls to drive the video alongside Three.js
   const handlePlay = useCallback(() => {
-    const captureTime = playbackState.frameIndex / capture.metadata.frameRate;
+    // Use frameIndexRef (not React state) to get the true current position
+    const frame = capture.frames[playbackState.frameIndexRef.current];
+    const captureTime = frame
+      ? frame.timestamp - capture.frames[0].timestamp
+      : 0;
     videoSyncRef.current?.onPlay(captureTime);
     rawPlaybackControls.play();
-  }, [rawPlaybackControls, capture, playbackState.frameIndex]);
+  }, [rawPlaybackControls, capture, playbackState.frameIndexRef]);
 
   const handlePause = useCallback(() => {
     videoSyncRef.current?.onPause();
@@ -145,7 +149,11 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const handleSeek = useCallback((index: number) => {
     rawPlaybackControls.seek(index);
-    const captureTime = index / capture.metadata.frameRate;
+    // Map frame index → actual capture elapsed time for the video seek
+    const frame = capture.frames[index];
+    const captureTime = frame
+      ? frame.timestamp - capture.frames[0].timestamp
+      : 0;
     videoSyncRef.current?.onSeek(captureTime);
   }, [rawPlaybackControls, capture]);
 

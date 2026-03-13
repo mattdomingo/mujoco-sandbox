@@ -6,6 +6,7 @@ import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
 export interface PlaybackState {
   isPlaying: boolean;
   frameIndex: number;
+  frameIndexRef: React.RefObject<number>;
 }
 
 export interface PlaybackControls {
@@ -125,7 +126,7 @@ export function usePlayback(
   }, [stopLoop]);
 
   return [
-    { isPlaying, frameIndex },
+    { isPlaying, frameIndex, frameIndexRef },
     { play, pause, seek },
   ];
 }
