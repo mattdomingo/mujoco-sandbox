@@ -2,8 +2,6 @@
 
 import type { PlaybackState, PlaybackControls } from "@/hooks/usePlayback";
 
-const SPEEDS = [0.25, 0.5, 1, 2];
-
 interface PlaybackControlsProps {
   state: PlaybackState;
   controls: PlaybackControls;
@@ -43,8 +41,7 @@ export default function PlaybackControlsPanel({
       </div>
 
       {/* Controls row */}
-      <div className="flex items-center justify-between">
-        {/* Play / Pause */}
+      <div className="flex items-center justify-center">
         <button
           onClick={state.isPlaying ? controls.pause : controls.play}
           className="w-9 h-9 flex items-center justify-center rounded-full bg-zinc-700 hover:bg-zinc-600 transition-colors"
@@ -61,24 +58,6 @@ export default function PlaybackControlsPanel({
             </svg>
           )}
         </button>
-
-        {/* Speed selector */}
-        <div className="flex items-center gap-1">
-          {SPEEDS.map((s) => (
-            <button
-              key={s}
-              onClick={() => controls.setSpeed(s)}
-              className={[
-                "px-2 py-1 rounded text-xs font-mono transition-colors",
-                state.speed === s
-                  ? "bg-blue-600 text-white"
-                  : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700",
-              ].join(" ")}
-            >
-              {s}x
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   );

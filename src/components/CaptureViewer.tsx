@@ -82,14 +82,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
 
-  const frameRateRef = useRef(capture.metadata.frameRate);
-  frameRateRef.current = capture.metadata.frameRate;
-
   const onFrame = useCallback((frame: CaptureFrame) => {
     if (!threeRef.current) return;
-
-    // Drift-correct the video every tick (no-op if no video)
-    videoSyncRef.current?.onTick(frame, frameRateRef.current);
 
     if (followHeadRef.current && frame.devicePose) {
       applyCameraFromDevicePose(threeRef.current, frame);
@@ -122,7 +116,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     }
   }, []);
 
-  const [playbackState, rawPlaybackControls] = usePlayback(capture, onFrame);
+  // Pass videoRef so the rAF tick drives Three.js from video.currentTime
+  const [playbackState, rawPlaybackControls] = usePlayback(capture, onFrame, capture.video ? videoRef : undefined);
 
   // Bind video file to the <video> element via an Object URL
   useEffect(() => {
@@ -132,26 +127,26 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     return () => URL.revokeObjectURL(url);
   }, [capture.video]);
 
-  // Wire up ref-based video sync (no React state in the hot path)
+  // Video sync controls — just play/pause/seek the video element
   const videoSync = useVideoSync(videoRef);
   videoSyncRef.current = videoSync;
 
-  // Wrap playback controls to inject video sync on play/pause/seek
+  // Wrap playback controls to drive the video alongside Three.js
   const handlePlay = useCallback(() => {
+    const captureTime = playbackState.frameIndex / capture.metadata.frameRate;
+    videoSyncRef.current?.onPlay(captureTime);
     rawPlaybackControls.play();
-    const frame = capture.frames[playbackState.frameIndex];
-    if (frame) videoSyncRef.current?.onPlay(frame, capture.metadata.frameRate);
   }, [rawPlaybackControls, capture, playbackState.frameIndex]);
 
   const handlePause = useCallback(() => {
-    rawPlaybackControls.pause();
     videoSyncRef.current?.onPause();
+    rawPlaybackControls.pause();
   }, [rawPlaybackControls]);
 
   const handleSeek = useCallback((index: number) => {
     rawPlaybackControls.seek(index);
-    const frame = capture.frames[index];
-    if (frame) videoSyncRef.current?.onSeek(frame, capture.metadata.frameRate);
+    const captureTime = index / capture.metadata.frameRate;
+    videoSyncRef.current?.onSeek(captureTime);
   }, [rawPlaybackControls, capture]);
 
   const playbackControls = {
@@ -409,41 +404,48 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           </div>
         )}
 
-        {/* camera_left video toggle button */}
+        {/* camera_left — single <video> element always in DOM so the browser
+            keeps decoding and currentTime advances even when the popup is
+            closed. When hidden, rendered as a 1×1 transparent pixel off-screen
+            (visibility:hidden / display:none both suspend decoding). */}
         {capture.video && (
-          <button
-            onClick={() => setShowVideoPopup(v => !v)}
-            className="absolute bottom-3 left-3 text-xs bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
-          >
-            camera_left
-          </button>
-        )}
+          <>
+            <button
+              onClick={() => setShowVideoPopup(v => !v)}
+              className="absolute bottom-3 left-3 text-xs bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2 text-zinc-300 hover:text-white hover:border-zinc-500 transition-colors"
+            >
+              camera_left
+            </button>
 
-        {/* camera_left floating video panel — always mounted so videoRef stays valid;
-            hidden via CSS when popup is closed */}
-        {capture.video && (
-          <div className={[
-            "absolute bottom-12 left-3 bg-zinc-900/90 backdrop-blur-sm border border-zinc-700 rounded-lg overflow-hidden shadow-xl",
-            showVideoPopup ? "" : "hidden",
-          ].join(" ")}>
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-700">
-              <span className="text-xs text-zinc-400 font-mono">camera_left</span>
-              <button
-                onClick={() => setShowVideoPopup(false)}
-                className="text-zinc-500 hover:text-white text-sm leading-none ml-4"
-                aria-label="Close video"
-              >
-                ×
-              </button>
-            </div>
+            {/* Popup panel — conditionally shown, but video element is outside */}
+            {showVideoPopup && (
+              <div className="absolute bottom-12 left-3 bg-zinc-900/90 backdrop-blur-sm border border-zinc-700 rounded-lg overflow-hidden shadow-xl pointer-events-none">
+                <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-700 pointer-events-auto">
+                  <span className="text-xs text-zinc-400 font-mono">camera_left</span>
+                  <button
+                    onClick={() => setShowVideoPopup(false)}
+                    className="text-zinc-500 hover:text-white text-sm leading-none ml-4"
+                    aria-label="Close video"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Single video element — always decoded; positioned to fill the
+                popup slot when open, or shrunk off-screen when closed */}
             <video
               ref={videoRef}
               playsInline
               muted
               preload="auto"
-              className="block w-72"
+              style={showVideoPopup
+                ? { position: "absolute", bottom: "calc(1.5rem + 2rem + 1px)", left: "0.75rem", width: "18rem", display: "block", borderRadius: "0 0 0.5rem 0.5rem" }
+                : { position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none", bottom: 0, left: 0 }
+              }
             />
-          </div>
+          </>
         )}
 
         {/* Read mode toggle */}
