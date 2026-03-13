@@ -3,33 +3,26 @@
  *
  * Coordinate systems
  * ──────────────────
- * AVP / Three.js world: Y-up.  Head at rest faces  -Z.  Right = +X.  Up = +Y.
- * MuJoCo humanoid:      Z-up.  Torso at rest faces  -Y.  Right = +X.  Up = +Z.
+ * AVP / Three.js world: Y-up.  Head at rest faces -Z.  Right = +X.  Up = +Y.
+ * MuJoCo humanoid:      Z-up.  Torso at rest faces +X.  Right = -Y. Up = +Z.
  *
- * The freejoint qpos quaternion rotates the humanoid FROM its Z-up neutral pose
- * TO the desired world orientation.  All IK is solved in AVP Y-up world space
- * using a torsoQuat that carries the correct upright orientation.
+ * BASE_ROTATION maps the Z-up humanoid neutral pose to Y-up world:
+ *   Rx(-90°) first, then Ry(+90°):  ry.multiply(rx)  in THREE convention.
+ * Verified: +X(fwd)→-Z, +Z(up)→+Y, -Y(right)→+X.
  *
- * torsoQuat construction
- * ──────────────────────
- * We want the humanoid to stand upright (Y-up) and face the same horizontal
- * direction as the AVP headset, relative to where it faced at frame 0.
+ * Torso position
+ * ──────────────
+ * The AVP device pose is at eye level. The torso centre is offset from the
+ * head by rotating a fixed body-offset vector by the head orientation, so
+ * when the user pitches forward the torso follows naturally.
  *
- * Steps:
- *   1. Compute a "stand" quaternion that rotates the Z-up neutral pose to
- *      stand upright in Y-up space: rotate -90° around X  (maps Z→Y).
- *      BUT the neutral humanoid faces -Y (Z-up), which after that rotation
- *      faces -Z in Y-up space.  We want it to face -Z initially (same as the
- *      AVP head at frame 0), so we add a further +90° around Y to make its
- *      neutral facing direction match the AVP reference frame.
- *      Combined base rotation: Ry(+90°) * Rx(-90°)
- *   2. Extract yaw from AVP head quaternion relative to frame-0 head yaw so
- *      the torso rotates only when the user turns their body (use a threshold
- *      to let head-only turns lag the torso).
- *   3. Apply: torsoQuat = Ryaw * BASE_ROTATION
+ * Elbow from AVP data
+ * ───────────────────
+ * The AVP skeleton provides forearmArm (index 25) — a measured point on the
+ * upper forearm, close to the elbow. We use this as the elbow pole-vector hint
+ * so the IK reflects real captured arm posture rather than guessing.
  *
- * Processes capture frames in 50-frame batches via setTimeout so the main
- * thread stays responsive.
+ * Processed in 50-frame batches via setTimeout to keep the main thread free.
  */
 
 import * as THREE from "three";
@@ -38,77 +31,29 @@ import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL } from "./ik";
 
 const BATCH_SIZE = 50;
-const WRIST_IDX = HAND_JOINT_NAMES.indexOf("forearmWrist");
+const WRIST_IDX    = HAND_JOINT_NAMES.indexOf("forearmWrist"); // 24
+const FOREARM_IDX  = HAND_JOINT_NAMES.indexOf("forearmArm");  // 25
 
-// ── Base rotation: maps the Z-up neutral humanoid to stand upright in Y-up ──
-//
-// MuJoCo humanoid neutral pose (Z-up):
-//   forward = +X,  up = +Z,  right = -Y
-//
-// Target Y-up world (AVP / Three.js):
-//   forward = -Z,  up = +Y,  right = +X
-//
-// Derivation (brute-force verified):
-//   Apply Rx(-90°) first → maps +Z to +Y, but forward goes to +Z (wrong).
-//   Then apply Ry(+90°) → rotates forward from +Z to -Z. ✓
-//   Net: ry.multiply(rx)  (THREE convention: rightmost quaternion applied first)
-//
-//   Verified mappings:
-//     +X (fwd)  → (0, 0,-1)  ✓
-//     +Z (up)   → (0, 1, 0)  ✓
-//     -Y (right)→ (1, 0, 0)  ✓
-const _rx90n = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
-const _ry90p = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0),  Math.PI / 2);
-// BASE = Ry(+90°) * Rx(-90°)  (Rx applied first, then Ry)
-const BASE_ROTATION = _ry90p.clone().multiply(_rx90n);
+// ── Base rotation: Z-up humanoid neutral → Y-up world ──────────────────────
+const _rx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const _ry = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0),  Math.PI / 2);
+// Apply Rx first, then Ry:  BASE = Ry * Rx  (THREE right-to-left)
+const BASE_ROTATION = _ry.clone().multiply(_rx);
+
+// ── Torso offset from head in head-local space ────────────────────────────
+// The torso centre is approximately 0.25 m below the head along the head's
+// down axis and 0.05 m behind (toward the back of the head). Rotating this
+// by the head orientation places the torso correctly when the user pitches.
+// Head-local: down = -Y (0, -1, 0), behind = +Z (0, 0, 1) in AVP head frame.
+const TORSO_OFFSET_HEAD_LOCAL = new THREE.Vector3(0, -0.25, 0.05);
 
 // Scratch objects
-const _headQuat = new THREE.Quaternion();
-const _fwd      = new THREE.Vector3();
-const _yawQuat  = new THREE.Quaternion();
-const _worldFwd = new THREE.Vector3(0, 0, -1);
+const _headQuat   = new THREE.Quaternion();
+const _fwd        = new THREE.Vector3();
+const _yawQuat    = new THREE.Quaternion();
+const _torsoOffset = new THREE.Vector3();
 
-/**
- * Build the torso quaternion (wxyz, for MuJoCo freejoint qpos).
- *
- * @param qx qy qz qw  AVP device pose quaternion (stored xyzw)
- * @param refYaw        yaw of the head at frame 0 (radians), used to compute
- *                      relative yaw so the body faces the correct direction
- */
-function buildTorsoQuat(
-  qx: number, qy: number, qz: number, qw: number,
-  refYaw: number
-): [number, number, number, number] {
-  _headQuat.set(qx, qy, qz, qw).normalize();
-
-  // Project head forward onto horizontal (XZ) plane
-  _fwd.set(0, 0, -1).applyQuaternion(_headQuat);
-  _fwd.y = 0;
-
-  let yaw: number;
-  if (_fwd.lengthSq() < 1e-6) {
-    // Looking straight up or down — keep reference yaw
-    yaw = refYaw;
-  } else {
-    _fwd.normalize();
-    // atan2(x, -z) gives yaw in Y-up space where forward = -Z
-    yaw = Math.atan2(_fwd.x, -_fwd.z);
-  }
-
-  // Relative yaw from frame-0 reference.
-  // Negated because a positive atan2 yaw (turning left in AVP space) should
-  // rotate the torso left, but Ry(+θ) rotates the humanoid's forward right.
-  const relYaw = -(yaw - refYaw);
-
-  // Build yaw rotation around world Y
-  _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
-
-  // Compose: yaw in world space, then apply base rotation
-  const result = _yawQuat.clone().multiply(BASE_ROTATION);
-  return [result.w, result.x, result.y, result.z];
-}
-
-/** Extract yaw angle (radians) from an AVP device pose quaternion. */
+/** Extract horizontal yaw angle (radians) from an AVP device pose quaternion. */
 function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
   _headQuat.set(qx, qy, qz, qw).normalize();
   _fwd.set(0, 0, -1).applyQuaternion(_headQuat);
@@ -117,6 +62,54 @@ function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
   _fwd.normalize();
   return Math.atan2(_fwd.x, -_fwd.z);
 }
+
+/**
+ * Build torso world position from head pose.
+ * Rotates a fixed head-local offset by the head orientation so the torso
+ * follows head pitch/lean, not just horizontal position.
+ */
+function buildTorsoPos(
+  headX: number, headY: number, headZ: number,
+  qx: number, qy: number, qz: number, qw: number
+): [number, number, number] {
+  _headQuat.set(qx, qy, qz, qw).normalize();
+  _torsoOffset.copy(TORSO_OFFSET_HEAD_LOCAL).applyQuaternion(_headQuat);
+  return [headX + _torsoOffset.x, headY + _torsoOffset.y, headZ + _torsoOffset.z];
+}
+
+/**
+ * Build the torso quaternion (wxyz for MuJoCo freejoint qpos).
+ * Extracts horizontal yaw relative to the frame-0 reference, then composes
+ * with BASE_ROTATION so the humanoid stands upright and faces correctly.
+ */
+function buildTorsoQuat(
+  qx: number, qy: number, qz: number, qw: number,
+  refYaw: number
+): [number, number, number, number] {
+  _headQuat.set(qx, qy, qz, qw).normalize();
+  _fwd.set(0, 0, -1).applyQuaternion(_headQuat);
+  _fwd.y = 0;
+
+  let yaw: number;
+  if (_fwd.lengthSq() < 1e-6) {
+    yaw = refYaw;
+  } else {
+    _fwd.normalize();
+    yaw = Math.atan2(_fwd.x, -_fwd.z);
+  }
+
+  // Negative because Ry(+θ) rotates humanoid forward rightward, but positive
+  // atan2 yaw means the user turned left.
+  const relYaw = -(yaw - refYaw);
+  _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
+
+  const result = _yawQuat.clone().multiply(BASE_ROTATION);
+  return [result.w, result.x, result.y, result.z];
+}
+
+const baseWXYZ: [number, number, number, number] = [
+  BASE_ROTATION.w, BASE_ROTATION.x, BASE_ROTATION.y, BASE_ROTATION.z,
+];
 
 export function computeHumanoidIKBackground(
   frames: CaptureFrame[],
@@ -128,16 +121,11 @@ export function computeHumanoidIKBackground(
   const results: HumanoidFrame[] = [];
   const total = frames.length;
 
-  // Compute reference yaw from frame 0's device pose (or 0 if unavailable)
+  // Reference yaw from first frame that has device pose
   const firstDp = frames.find(f => f.devicePose)?.devicePose ?? null;
   const refYaw = firstDp
     ? extractYaw(firstDp.qx, firstDp.qy, firstDp.qz, firstDp.qw)
     : 0;
-
-  // Default base quat (no head data): just the upright base rotation
-  const baseWXYZ: [number, number, number, number] = [
-    BASE_ROTATION.w, BASE_ROTATION.x, BASE_ROTATION.y, BASE_ROTATION.z,
-  ];
 
   function processBatch() {
     const end = Math.min(solved + BATCH_SIZE, total);
@@ -146,15 +134,17 @@ export function computeHumanoidIKBackground(
       const frame = frames[i];
       const dp = frame.devicePose;
 
-      // Torso position: device pose is at eye level, torso center ~0.25m below
+      // Torso position: derived from head pose with pitch-aware offset
       const torsoPos: [number, number, number] = dp
-        ? [dp.x, dp.y - 0.25, dp.z]
+        ? buildTorsoPos(dp.x, dp.y, dp.z, dp.qx, dp.qy, dp.qz, dp.qw)
         : [0, 1.0, 0];
 
+      // Torso orientation: upright + yaw only
       const torsoQuat: [number, number, number, number] = dp
         ? buildTorsoQuat(dp.qx, dp.qy, dp.qz, dp.qw, refYaw)
         : baseWXYZ;
 
+      // Wrist targets from AVP forearmWrist (index 24)
       const rWrist = frame.rightHand?.[WRIST_IDX];
       const lWrist = frame.leftHand?.[WRIST_IDX];
 
@@ -166,8 +156,21 @@ export function computeHumanoidIKBackground(
         ? [lWrist.px, lWrist.py, lWrist.pz]
         : [torsoPos[0] - 0.4, torsoPos[1] - 0.2, torsoPos[2]];
 
-      const rIK = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rTarget, "right");
-      const lIK = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lTarget, "left");
+      // Elbow hints from AVP forearmArm (index 25) — real measured elbow region.
+      // When present this drives the elbow direction from actual data.
+      const rForearm = frame.rightHand?.[FOREARM_IDX];
+      const lForearm = frame.leftHand?.[FOREARM_IDX];
+
+      const rElbowHint: [number, number, number] | undefined = rForearm
+        ? [rForearm.px, rForearm.py, rForearm.pz]
+        : undefined;
+
+      const lElbowHint: [number, number, number] | undefined = lForearm
+        ? [lForearm.px, lForearm.py, lForearm.pz]
+        : undefined;
+
+      const rIK = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rTarget, "right", rElbowHint);
+      const lIK = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lTarget, "left",  lElbowHint);
 
       results.push({
         frameIndex: frame.index,
