@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import * as THREE from "three";
 import type { ParsedCapture, CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
 import { useVideoSync } from "@/hooks/useVideoSync";
@@ -79,7 +78,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const showHumanoidRef = useRef(true);
   showHumanoidRef.current = showHumanoid;
 
-  const [headYawDeg, setHeadYawDeg] = useState<number | null>(null);
+  const [showHeadFacing, setShowHeadFacing] = useState(true);
+  const showHeadFacingRef = useRef(true);
+  showHeadFacingRef.current = showHeadFacing;
 
   // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
   const followHeadRef = useRef(followHead);
@@ -121,20 +122,17 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
         if (!followHeadRef.current) {
           setZoomDistance(threeRef.current.controls.getDistance());
         }
-        if (frame.devicePose) {
-          const dp = frame.devicePose;
-          const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(
-            new THREE.Quaternion(dp.qx, dp.qy, dp.qz, dp.qw).normalize()
-          );
-          fwd.y = 0;
-          const yaw = fwd.lengthSq() > 1e-6
-            ? Math.atan2(fwd.x, -fwd.z) * (180 / Math.PI)
-            : 0;
-          setHeadYawDeg(yaw);
-        }
       }
 
-      renderFromMujoco(threeRef.current, mujocoRef.current, readModeRef.current, showHumanoidRef.current, violatedBodies);
+      renderFromMujoco(
+        threeRef.current,
+        mujocoRef.current,
+        readModeRef.current,
+        showHumanoidRef.current,
+        violatedBodies,
+        frame.devicePose,
+        showHeadFacingRef.current
+      );
     } else {
       renderFromFrame(threeRef.current, frame);
     }
@@ -188,18 +186,24 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     seek:  handleSeek,
   };
 
+  const renderCurrentFrame = useCallback(() => {
+    const frame = capture.frames[playbackState.frameIndexRef.current] ?? capture.frames[0];
+    if (frame) onFrame(frame);
+  }, [capture.frames, onFrame, playbackState.frameIndexRef]);
+
   const handleToggleHumanoid = useCallback(() => {
-    setShowHumanoid(prev => {
-      const next = !prev;
-      const h = threeRef.current?.humanoid;
-      if (h && !next) {
-        h.joints.forEach(m => { m.visible = false; });
-        h.bones.forEach(m =>  { m.visible = false; });
-      }
-      // When turning back on, the next render frame will restore visibility naturally
-      return next;
-    });
-  }, []);
+    const next = !showHumanoidRef.current;
+    showHumanoidRef.current = next;
+    setShowHumanoid(next);
+    renderCurrentFrame();
+  }, [renderCurrentFrame]);
+
+  const handleToggleHeadFacing = useCallback(() => {
+    const next = !showHeadFacingRef.current;
+    showHeadFacingRef.current = next;
+    setShowHeadFacing(next);
+    renderCurrentFrame();
+  }, [renderCurrentFrame]);
 
   const handleToggle = useCallback(() => {
     setFollowHead(prev => {
@@ -259,7 +263,15 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           }
           if (frame0) {
             applyFrame(instance, frame0);
-            renderFromMujoco(three, instance, readModeRef.current);
+            renderFromMujoco(
+              three,
+              instance,
+              readModeRef.current,
+              showHumanoidRef.current,
+              undefined,
+              frame0.devicePose,
+              showHeadFacingRef.current
+            );
           }
 
           // Start background IK if device pose is available
@@ -357,20 +369,29 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
         {/* Top-right controls row */}
         <div className="absolute top-3 right-3 flex items-center gap-2">
-          {/* Head-facing compass — only shown when device pose is available and IK is ready */}
-          {hasDevicePose && ikStage === "ready" && headYawDeg !== null && (
-            <div className="flex flex-col items-center gap-1 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
-              <span className="text-[10px] text-zinc-400 select-none">Head facing</span>
-              <svg width="32" height="32" viewBox="-16 -16 32 32">
-                <circle r="14" fill="none" stroke="#52525b" strokeWidth="1.5"/>
-                <text x="0" y="-8" textAnchor="middle" fontSize="5" fill="#71717a">N</text>
-                <g transform={`rotate(${headYawDeg})`}>
-                  <polygon points="0,-10 3,4 0,2 -3,4" fill="#3b82f6"/>
-                </g>
-              </svg>
-              <span className="text-[10px] font-mono text-zinc-300 select-none">
-                {Math.round(headYawDeg)}°
-              </span>
+          {/* Head-facing line toggle */}
+          {hasDevicePose && ikStage === "ready" && (
+            <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+              <span className="text-xs text-zinc-400 select-none">Head facing</span>
+              <button
+                onClick={handleToggleHeadFacing}
+                className={[
+                  "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                  "transition-colors duration-200 focus:outline-none",
+                  showHeadFacing ? "bg-cyan-500" : "bg-zinc-600",
+                ].join(" ")}
+                role="switch"
+                aria-checked={showHeadFacing}
+                title={showHeadFacing ? "Head-facing line visible — click to hide" : "Head-facing line hidden — click to show"}
+              >
+                <span
+                  className={[
+                    "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                    "transform transition duration-200",
+                    showHeadFacing ? "translate-x-4" : "translate-x-0",
+                  ].join(" ")}
+                />
+              </button>
             </div>
           )}
 

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
-import type { CaptureFrame } from "@/lib/pkg/types";
+import type { CaptureFrame, DevicePose } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 
 // Bone connections: pairs of joint indices (into HAND_JOINT_NAMES)
@@ -41,6 +41,7 @@ export interface ThreeScene {
   rightHand: HandScene;
   leftHand:  HandScene;
   pressureBall: THREE.Mesh;
+  headFacingIndicator: THREE.Mesh;
   humanoid: HumanoidScene | null;
   dispose:   () => void;
 }
@@ -108,6 +109,23 @@ function makePressureBall(scene: THREE.Scene): THREE.Mesh {
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.set(0, 0.9, 0.5); // matches XML pos
+  scene.add(mesh);
+  return mesh;
+}
+
+const HEAD_FACING_START_OFFSET = 0.1;
+const HEAD_FACING_LENGTH = 0.22;
+
+function makeHeadFacingIndicator(scene: THREE.Scene): THREE.Mesh {
+  const geo = new THREE.CylinderGeometry(0.006, 0.006, 1, 8);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x22d3ee,
+    emissive: 0x164e63,
+    roughness: 0.25,
+    metalness: 0.15,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.visible = false;
   scene.add(mesh);
   return mesh;
 }
@@ -190,6 +208,7 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   const rightHand    = makeHandScene(scene, 0xe69966); // orange
   const leftHand     = makeHandScene(scene, 0x6699e6); // blue
   const pressureBall = makePressureBall(scene);
+  const headFacingIndicator = makeHeadFacingIndicator(scene);
 
   const dispose = () => {
     controls.dispose();
@@ -197,7 +216,18 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
     scene.clear();
   };
 
-  return { renderer, scene, camera, controls, rightHand, leftHand, pressureBall, humanoid: null, dispose };
+  return {
+    renderer,
+    scene,
+    camera,
+    controls,
+    rightHand,
+    leftHand,
+    pressureBall,
+    headFacingIndicator,
+    humanoid: null,
+    dispose,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +344,7 @@ export function renderFromFrame(threeScene: ThreeScene, frame: CaptureFrame) {
   const hideForarm = threeScene.humanoid !== null;
   syncHandFromFrame(rightHand, frame, "right", hideForarm);
   syncHandFromFrame(leftHand,  frame, "left",  hideForarm);
+  threeScene.headFacingIndicator.visible = false;
   if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }
@@ -465,6 +496,36 @@ const _hPosA = new THREE.Vector3();
 const _hPosB = new THREE.Vector3();
 const _colorNormal    = new THREE.Color(0x888888);
 const _colorViolation = new THREE.Color(0xff3333);
+const _headFacingStart = new THREE.Vector3();
+const _headFacingEnd   = new THREE.Vector3();
+const _headFacingDir   = new THREE.Vector3();
+const _headFacingQuat  = new THREE.Quaternion();
+
+function hideHumanoid(humanoidScene: HumanoidScene) {
+  humanoidScene.joints.forEach((mesh) => { mesh.visible = false; });
+  humanoidScene.bones.forEach((mesh) => { mesh.visible = false; });
+}
+
+function syncHeadFacingIndicator(
+  threeScene: ThreeScene,
+  headPosition: THREE.Vector3,
+  devicePose: DevicePose | null
+) {
+  if (!devicePose) {
+    threeScene.headFacingIndicator.visible = false;
+    return;
+  }
+
+  _headFacingQuat.set(devicePose.qx, devicePose.qy, devicePose.qz, devicePose.qw).normalize();
+  _headFacingDir.set(0, 0, -1).applyQuaternion(_headFacingQuat).normalize();
+
+  _headFacingStart.copy(headPosition).addScaledVector(_headFacingDir, HEAD_FACING_START_OFFSET);
+  _headFacingEnd
+    .copy(headPosition)
+    .addScaledVector(_headFacingDir, HEAD_FACING_START_OFFSET + HEAD_FACING_LENGTH);
+
+  updateBone(threeScene.headFacingIndicator, _headFacingStart, _headFacingEnd);
+}
 
 export function renderHumanoidFromMujoco(
   humanoidScene: HumanoidScene,
@@ -521,13 +582,30 @@ export function renderFromMujoco(
   instance: MuJoCoInstance,
   readMode: MuJoCoReadMode = "mocap",
   showHumanoid = true,
-  violatedBodies?: Set<string>
+  violatedBodies?: Set<string>,
+  devicePose: DevicePose | null = null,
+  showHeadFacing = false
 ) {
   const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
   const hideForarm = threeScene.humanoid !== null && showHumanoid;
   syncHandFromMujoco(rightHand, instance, "r_", readMode, hideForarm);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
-  if (threeScene.humanoid && showHumanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance, violatedBodies);
+  if (threeScene.humanoid) {
+    if (showHumanoid) {
+      renderHumanoidFromMujoco(threeScene.humanoid, instance, violatedBodies);
+      const headMesh = threeScene.humanoid.joints.get("head");
+      if (showHeadFacing && headMesh?.visible) {
+        syncHeadFacingIndicator(threeScene, headMesh.position, devicePose);
+      } else {
+        threeScene.headFacingIndicator.visible = false;
+      }
+    } else {
+      hideHumanoid(threeScene.humanoid);
+      threeScene.headFacingIndicator.visible = false;
+    }
+  } else {
+    threeScene.headFacingIndicator.visible = false;
+  }
   if (controls.enabled) controls.update();
   renderer.render(scene, camera);
 }
