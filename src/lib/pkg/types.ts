@@ -69,3 +69,23 @@ export interface ParsedCapture {
   audio: Blob | null;
   transcript: string | null;
 }
+
+// IK-solved hinge angles for both arms of the humanoid (radians).
+export interface HumanoidArmAngles {
+  rShoulder1: number;
+  rShoulder2: number;
+  rElbow: number;
+  rReachable: boolean;
+  lShoulder1: number;
+  lShoulder2: number;
+  lElbow: number;
+  lReachable: boolean;
+}
+
+// Per-frame humanoid pose: torso driven from devicePose, arms from IK.
+export interface HumanoidFrame {
+  frameIndex: number;
+  torsoPos: [number, number, number];
+  torsoQuat: [number, number, number, number]; // wxyz
+  arms: HumanoidArmAngles;
+}

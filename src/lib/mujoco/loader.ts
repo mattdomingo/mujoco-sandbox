@@ -1,4 +1,4 @@
-import type { CaptureFrame, HandPose } from "@/lib/pkg/types";
+import type { CaptureFrame, HandPose, HumanoidFrame, HumanoidArmAngles } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import type { MjModel, MjData, MjContact } from "mujoco-js/dist/mujoco_wasm";
 
@@ -18,11 +18,20 @@ export interface MuJoCoInstance {
   // geom ids belonging to the right-hand and left-hand mocap bodies
   rightHandGeomIds: Set<number>;
   leftHandGeomIds: Set<number>;
+  // Humanoid body ids for Three.js rendering (read from data.xpos)
+  humanoidBodyIds: Map<string, number>;
+  // qpos addresses for arm hinge joints
+  rShoulder1QposAdr: number;
+  rShoulder2QposAdr: number;
+  rElbowQposAdr: number;
+  lShoulder1QposAdr: number;
+  lShoulder2QposAdr: number;
+  lElbowQposAdr: number;
 }
 
 export type MuJoCoStage =
   | "booting"      // importing + initialising the WASM module
-  | "fetching"     // fetching holos_hands.xml
+  | "fetching"     // fetching holos_humanoid.xml
   | "loading"      // MjModel.loadFromXML + MjData
   | "indexing"     // building the mocap index map
   | "ready"        // fully loaded
@@ -97,17 +106,17 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     throw e;
   }
 
-  // ── Stage 3: fetch hand model XML ───────────────────────────────────────
+  // ── Stage 3: fetch humanoid model XML ───────────────────────────────────
   report("fetching");
-  console.log("[MuJoCo] fetching /models/holos_hands.xml");
+  console.log("[MuJoCo] fetching /models/holos_humanoid.xml");
   let xml: string;
   try {
-    const xmlResponse = await fetch("/models/holos_hands.xml");
-    if (!xmlResponse.ok) throw new Error(`HTTP ${xmlResponse.status} fetching /models/holos_hands.xml`);
+    const xmlResponse = await fetch("/models/holos_humanoid.xml");
+    if (!xmlResponse.ok) throw new Error(`HTTP ${xmlResponse.status} fetching /models/holos_humanoid.xml`);
     xml = await xmlResponse.text();
     console.log(`[MuJoCo] XML fetched (${xml.length} chars)`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (mujoco as any).FS.writeFile("/working/holos_hands.xml", xml);
+    (mujoco as any).FS.writeFile("/working/holos_humanoid.xml", xml);
   } catch (e) {
     console.error("[MuJoCo] XML fetch/write failed:", e);
     throw e;
@@ -121,7 +130,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   let model: MjModel;
   let data: MjData;
   try {
-    model = m.MjModel.loadFromXML("/working/holos_hands.xml");
+    model = m.MjModel.loadFromXML("/working/holos_humanoid.xml");
     console.log(`[MuJoCo] MjModel loaded — nbody=${model.nbody}, nmocap=${model.nmocap}`);
     data = new m.MjData(model);
     console.log("[MuJoCo] MjData created");
@@ -165,7 +174,41 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     throw e;
   }
 
-  // ── Stage 6: find pressure_ball geom id + hand geom sets ────────────────
+  // ── Stage 6: index humanoid body ids + arm joint qpos addresses ─────────
+  const OBJ_JOINT: number = m.mjtObj.mjOBJ_JOINT.value;
+  const jntQposAdr = (name: string): number => {
+    const id: number = m.mj_name2id(model, OBJ_JOINT, name);
+    return id >= 0 ? (model.jnt_qposadr[id] as number) : -1;
+  };
+
+  const rShoulder1QposAdr = jntQposAdr("shoulder1_right");
+  const rShoulder2QposAdr = jntQposAdr("shoulder2_right");
+  const rElbowQposAdr     = jntQposAdr("elbow_right");
+  const lShoulder1QposAdr = jntQposAdr("shoulder1_left");
+  const lShoulder2QposAdr = jntQposAdr("shoulder2_left");
+  const lElbowQposAdr     = jntQposAdr("elbow_left");
+
+  console.log(
+    `[MuJoCo] arm joint qpos addresses — ` +
+    `rS1=${rShoulder1QposAdr} rS2=${rShoulder2QposAdr} rE=${rElbowQposAdr} ` +
+    `lS1=${lShoulder1QposAdr} lS2=${lShoulder2QposAdr} lE=${lElbowQposAdr}`
+  );
+
+  const humanoidBodyNames = [
+    "torso", "head", "waist_lower", "pelvis",
+    "upper_arm_right", "lower_arm_right", "hand_right",
+    "upper_arm_left",  "lower_arm_left",  "hand_left",
+    "thigh_right", "shin_right", "foot_right",
+    "thigh_left",  "shin_left",  "foot_left",
+  ];
+  const humanoidBodyIds = new Map<string, number>();
+  for (const name of humanoidBodyNames) {
+    const id = bodyIndex.get(name);
+    if (id !== undefined) humanoidBodyIds.set(name, id);
+  }
+  console.log(`[MuJoCo] humanoid body ids indexed — ${humanoidBodyIds.size} bodies`);
+
+  // ── Stage 7: find pressure_ball geom id + hand geom sets ────────────────
   // These geom ids let us query ball contacts and left↔right hand contacts.
   const ballBodyId = bodyIndex.get("pressure_ball") ?? -1;
   let ballGeomId = -1;
@@ -209,6 +252,13 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     ballBodyId,
     rightHandGeomIds,
     leftHandGeomIds,
+    humanoidBodyIds,
+    rShoulder1QposAdr,
+    rShoulder2QposAdr,
+    rElbowQposAdr,
+    lShoulder1QposAdr,
+    lShoulder2QposAdr,
+    lElbowQposAdr,
   };
 }
 
@@ -236,9 +286,40 @@ function applyHand(instance: MuJoCoInstance, prefix: string, hand: HandPose) {
   }
 }
 
-export function applyFrame(instance: MuJoCoInstance, frame: CaptureFrame) {
+// Write torso freejoint pose into qpos[0..6]: [px, py, pz, qw, qx, qy, qz]
+function applyTorso(instance: MuJoCoInstance, hf: HumanoidFrame) {
+  const { data } = instance;
+  data.qpos[0] = hf.torsoPos[0];
+  data.qpos[1] = hf.torsoPos[1];
+  data.qpos[2] = hf.torsoPos[2];
+  data.qpos[3] = hf.torsoQuat[0]; // w
+  data.qpos[4] = hf.torsoQuat[1]; // x
+  data.qpos[5] = hf.torsoQuat[2]; // y
+  data.qpos[6] = hf.torsoQuat[3]; // z
+}
+
+// Write IK-solved arm hinge angles into their qpos slots.
+function applyArmIK(instance: MuJoCoInstance, arms: HumanoidArmAngles) {
+  const { data } = instance;
+  if (instance.rShoulder1QposAdr >= 0) data.qpos[instance.rShoulder1QposAdr] = arms.rShoulder1;
+  if (instance.rShoulder2QposAdr >= 0) data.qpos[instance.rShoulder2QposAdr] = arms.rShoulder2;
+  if (instance.rElbowQposAdr     >= 0) data.qpos[instance.rElbowQposAdr]     = arms.rElbow;
+  if (instance.lShoulder1QposAdr >= 0) data.qpos[instance.lShoulder1QposAdr] = arms.lShoulder1;
+  if (instance.lShoulder2QposAdr >= 0) data.qpos[instance.lShoulder2QposAdr] = arms.lShoulder2;
+  if (instance.lElbowQposAdr     >= 0) data.qpos[instance.lElbowQposAdr]     = arms.lElbow;
+}
+
+export function applyFrame(
+  instance: MuJoCoInstance,
+  frame: CaptureFrame,
+  humanoidFrame?: HumanoidFrame
+) {
   if (frame.rightHand) applyHand(instance, "r_", frame.rightHand);
   if (frame.leftHand)  applyHand(instance, "l_", frame.leftHand);
+  if (humanoidFrame) {
+    applyTorso(instance, humanoidFrame);
+    applyArmIK(instance, humanoidFrame.arms);
+  }
 
   instance.mujoco.mj_forward(instance.model, instance.data);
 }

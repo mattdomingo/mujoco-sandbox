@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { ParsedCapture, CaptureFrame } from "@/lib/pkg/types";
+import type { ParsedCapture, CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
 import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
+import { computeHumanoidIKBackground } from "@/lib/mujoco/humanoidIk";
 import {
   initThreeScene,
   renderFromFrame,
@@ -13,11 +14,14 @@ import {
   applyCameraFromDevicePose,
   resizeRenderer,
   updatePressureBall,
+  makeHumanoidScene,
 } from "@/lib/three/scene";
 import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
 import MuJoCoStatus from "./MuJoCoStatus";
 import PressureDisplay from "./PressureDisplay";
+import IKStatus from "./IKStatus";
+import type { IKStage } from "./IKStatus";
 
 interface CaptureViewerProps {
   capture: ParsedCapture;
@@ -52,6 +56,13 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const [handContactCount, setHandContactCount]     = useState(0);
   const pressureFrameRef = useRef(0); // frame counter for decimating HUD updates
 
+  // IK state
+  const [ikStage, setIkStage]   = useState<IKStage>("pending");
+  const [ikSolved, setIkSolved] = useState(0);
+  const [ikTotal, setIkTotal]   = useState(0);
+  const humanoidFramesRef       = useRef<HumanoidFrame[] | null>(null);
+  const ikCancelRef             = useRef<(() => void) | null>(null);
+
   // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
   const followHeadRef = useRef(followHead);
   followHeadRef.current = followHead;
@@ -64,7 +75,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     }
 
     if (mujocoRef.current) {
-      applyFrame(mujocoRef.current, frame);
+      const humanoidFrame = humanoidFramesRef.current?.[frame.index];
+      applyFrame(mujocoRef.current, frame, humanoidFrame);
 
       // Read MuJoCo contact forces and update the ball mesh every frame.
       const ballResult = readContactPressure(mujocoRef.current);
@@ -142,6 +154,26 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             applyFrame(instance, frame0);
             renderFromMujoco(three, instance, readModeRef.current);
           }
+
+          // Start background IK if device pose is available
+          const hasDevicePoseFrames = capture.frames.some(f => f.devicePose);
+          if (hasDevicePoseFrames) {
+            setIkStage("computing");
+            setIkTotal(capture.frames.length);
+            ikCancelRef.current = computeHumanoidIKBackground(
+              capture.frames,
+              (s, t) => { setIkSolved(s); setIkTotal(t); },
+              (humanoidFrames) => {
+                humanoidFramesRef.current = humanoidFrames;
+                setIkStage("ready");
+                if (threeRef.current) {
+                  threeRef.current.humanoid = makeHumanoidScene(threeRef.current.scene);
+                }
+              }
+            );
+          } else {
+            setIkStage("skipped");
+          }
         })
         .catch((err: Error) => {
           if (elapsedIntervalRef.current) {
@@ -166,6 +198,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     return () => {
       cancelAnimationFrame(rafId);
       if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+      ikCancelRef.current?.();
+      ikCancelRef.current = null;
       window.removeEventListener("resize", onResize);
       threeRef.current?.dispose();
       threeRef.current = null;
@@ -192,6 +226,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           settled={mujocoSettled}
           errorMessage={mujocoError}
         />
+
+        {/* Humanoid IK progress */}
+        <IKStatus stage={ikStage} solved={ikSolved} total={ikTotal} />
 
         {/* Pressure display — only shown when MuJoCo is running */}
         {mujocoReady && (

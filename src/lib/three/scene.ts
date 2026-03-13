@@ -26,6 +26,12 @@ export interface HandScene {
   bones:  THREE.Mesh[];
 }
 
+export interface HumanoidScene {
+  joints: Map<string, THREE.Mesh>;    // body name → sphere mesh
+  bones:  THREE.Mesh[];               // cylinder meshes between joint pairs
+  segmentPairs: [string, string][];   // body name pairs for bone rendering
+}
+
 export interface ThreeScene {
   renderer: THREE.WebGLRenderer;
   scene:    THREE.Scene;
@@ -33,6 +39,7 @@ export interface ThreeScene {
   rightHand: HandScene;
   leftHand:  HandScene;
   pressureBall: THREE.Mesh;
+  humanoid: HumanoidScene | null;
   dispose:   () => void;
 }
 
@@ -173,7 +180,7 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
     scene.clear();
   };
 
-  return { renderer, scene, camera, rightHand, leftHand, pressureBall, dispose };
+  return { renderer, scene, camera, rightHand, leftHand, pressureBall, humanoid: null, dispose };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +347,99 @@ function syncHandFromMujoco(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Humanoid stick-figure rendering
+// ---------------------------------------------------------------------------
+
+const HUMANOID_SEGMENT_PAIRS: [string, string][] = [
+  // Spine
+  ["torso", "waist_lower"],
+  ["waist_lower", "pelvis"],
+  // Right arm
+  ["torso", "upper_arm_right"],
+  ["upper_arm_right", "lower_arm_right"],
+  ["lower_arm_right", "hand_right"],
+  // Left arm
+  ["torso", "upper_arm_left"],
+  ["upper_arm_left", "lower_arm_left"],
+  ["lower_arm_left", "hand_left"],
+  // Right leg
+  ["pelvis", "thigh_right"],
+  ["thigh_right", "shin_right"],
+  ["shin_right", "foot_right"],
+  // Left leg
+  ["pelvis", "thigh_left"],
+  ["thigh_left", "shin_left"],
+  ["shin_left", "foot_left"],
+  // Head
+  ["torso", "head"],
+];
+
+const HUMANOID_JOINT_NAMES = [
+  "torso", "head", "waist_lower", "pelvis",
+  "upper_arm_right", "lower_arm_right", "hand_right",
+  "upper_arm_left",  "lower_arm_left",  "hand_left",
+  "thigh_right", "shin_right", "foot_right",
+  "thigh_left",  "shin_left",  "foot_left",
+];
+
+export function makeHumanoidScene(scene: THREE.Scene): HumanoidScene {
+  const joints = new Map<string, THREE.Mesh>();
+  for (const name of HUMANOID_JOINT_NAMES) {
+    const geo = new THREE.SphereGeometry(0.04, 8, 8);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    joints.set(name, mesh);
+  }
+
+  const bones: THREE.Mesh[] = [];
+  for (let i = 0; i < HUMANOID_SEGMENT_PAIRS.length; i++) {
+    const mesh = makeBoneCylinder(0x888888);
+    mesh.visible = false;
+    scene.add(mesh);
+    bones.push(mesh);
+  }
+
+  return { joints, bones, segmentPairs: HUMANOID_SEGMENT_PAIRS };
+}
+
+const _hPosA = new THREE.Vector3();
+const _hPosB = new THREE.Vector3();
+
+function renderHumanoidFromMujoco(
+  humanoidScene: HumanoidScene,
+  instance: MuJoCoInstance
+) {
+  const { data, humanoidBodyIds } = instance;
+  const { joints, bones, segmentPairs } = humanoidScene;
+
+  for (const [name, mesh] of joints) {
+    const bid = humanoidBodyIds.get(name);
+    if (bid === undefined) { mesh.visible = false; continue; }
+    mesh.position.set(
+      data.xpos[bid * 3 + 0],
+      data.xpos[bid * 3 + 1],
+      data.xpos[bid * 3 + 2]
+    );
+    mesh.visible = true;
+  }
+
+  for (let i = 0; i < segmentPairs.length; i++) {
+    const [nameA, nameB] = segmentPairs[i];
+    const meshA = joints.get(nameA);
+    const meshB = joints.get(nameB);
+    if (!meshA?.visible || !meshB?.visible) {
+      bones[i].visible = false;
+      continue;
+    }
+    _hPosA.copy(meshA.position);
+    _hPosB.copy(meshB.position);
+    updateBone(bones[i], _hPosA, _hPosB);
+  }
+}
+
 export function renderFromMujoco(
   threeScene: ThreeScene,
   instance: MuJoCoInstance,
@@ -348,6 +448,7 @@ export function renderFromMujoco(
   const { renderer, scene, camera, rightHand, leftHand } = threeScene;
   syncHandFromMujoco(rightHand, instance, "r_", readMode);
   syncHandFromMujoco(leftHand,  instance, "l_", readMode);
+  if (threeScene.humanoid) renderHumanoidFromMujoco(threeScene.humanoid, instance);
   renderer.render(scene, camera);
 }
 

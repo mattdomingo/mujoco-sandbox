@@ -50,12 +50,12 @@ test("model loads with correct body and mocap counts", async ({ page }) => {
     };
   });
 
-  // holos_hands.xml defines 52 mocap bodies (26 per hand) + 1 world body + 1 free pressure_ball
-  // bodyIndex includes the world body if it has a name, so size >= 53
-  expect(nbody,     "nbody should be 54 (world + 52 hand joints + pressure_ball)").toBe(54);
+  // holos_humanoid.xml = humanoid (16 bodies) + 52 hand mocap bodies + pressure_ball + world
+  // Total nbody = 1 (world) + 16 (humanoid) + 52 (hands) + 1 (ball) = 70
+  expect(nbody,     "nbody should be 70 (world + 16 humanoid + 52 hand joints + pressure_ball)").toBe(70);
   expect(nmocap,    "nmocap should be 52").toBe(52);
   expect(mocapKeys, "mocapIndex should have 52 entries").toBe(52);
-  expect(bodyKeys,  "bodyIndex should have at least 53 named bodies").toBeGreaterThanOrEqual(53);
+  expect(bodyKeys,  "bodyIndex should have at least 69 named bodies").toBeGreaterThanOrEqual(69);
 });
 
 // ---------------------------------------------------------------------------
