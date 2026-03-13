@@ -168,14 +168,28 @@ function lerpHandPose(a: HandPose, b: HandPose, t: number): HandPose {
  * Frames before the first valid pose or after the last valid pose are
  * filled with the nearest boundary pose (hold, no extrapolation).
  */
-function interpolateHandPoses(poses: (HandPose | null)[]): (HandPose | null)[] {
+interface GapStats {
+  nullCount: number;       // frames with no tracking data
+  gapCount: number;        // number of distinct null runs
+  maxGapFrames: number;    // longest single null run
+  leadingFrames: number;   // null frames before first valid pose
+  trailingFrames: number;  // null frames after last valid pose
+}
+
+function interpolateHandPoses(poses: (HandPose | null)[]): { result: (HandPose | null)[]; stats: GapStats } {
   const result = poses.slice();
   const n = result.length;
 
   // Find first and last valid indices
   let first = -1, last = -1;
   for (let i = 0; i < n; i++) if (result[i]) { if (first < 0) first = i; last = i; }
-  if (first < 0) return result; // all null — nothing to do
+
+  const leadingFrames  = first < 0 ? n : first;
+  const trailingFrames = first < 0 ? 0 : n - 1 - last;
+
+  if (first < 0) {
+    return { result, stats: { nullCount: n, gapCount: 0, maxGapFrames: 0, leadingFrames, trailingFrames } };
+  }
 
   // Hold first pose backward to frame 0
   for (let i = 0; i < first; i++) result[i] = result[first];
@@ -183,12 +197,21 @@ function interpolateHandPoses(poses: (HandPose | null)[]): (HandPose | null)[] {
   // Hold last pose forward to end
   for (let i = last + 1; i < n; i++) result[i] = result[last];
 
-  // Lerp across interior gaps
+  // Lerp across interior gaps, collecting stats
   let gapStart = -1;
+  let gapCount = 0;
+  let maxGapFrames = 0;
+  let nullCount = leadingFrames + trailingFrames;
+
   for (let i = first; i <= last; i++) {
     if (result[i] === null && gapStart < 0) {
       gapStart = i;
     } else if (result[i] !== null && gapStart >= 0) {
+      const gapLen = i - gapStart;
+      nullCount += gapLen;
+      gapCount++;
+      if (gapLen > maxGapFrames) maxGapFrames = gapLen;
+
       // Gap runs from gapStart to i-1; anchor poses are at gapStart-1 and i
       const before = result[gapStart - 1]!;
       const after  = result[i]!;
@@ -200,7 +223,7 @@ function interpolateHandPoses(poses: (HandPose | null)[]): (HandPose | null)[] {
     }
   }
 
-  return result;
+  return { result, stats: { nullCount, gapCount, maxGapFrames, leadingFrames, trailingFrames } };
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +256,18 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   // gaps so hands move smoothly through tracking drop-outs instead of freezing.
   const rawLeft:  (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.left);
   const rawRight: (HandPose | null)[] = timestamps.map(t => frameMap.get(t)!.right);
-  const interpLeft  = interpolateHandPoses(rawLeft);
-  const interpRight = interpolateHandPoses(rawRight);
+  const { result: interpLeft,  stats: leftStats  } = interpolateHandPoses(rawLeft);
+  const { result: interpRight, stats: rightStats } = interpolateHandPoses(rawRight);
+
+  const total = timestamps.length;
+  console.log(
+    `[parser] left  — total=${total} null=${leftStats.nullCount} gaps=${leftStats.gapCount}` +
+    ` maxGap=${leftStats.maxGapFrames}fr leading=${leftStats.leadingFrames} trailing=${leftStats.trailingFrames}`
+  );
+  console.log(
+    `[parser] right — total=${total} null=${rightStats.nullCount} gaps=${rightStats.gapCount}` +
+    ` maxGap=${rightStats.maxGapFrames}fr leading=${rightStats.leadingFrames} trailing=${rightStats.trailingFrames}`
+  );
 
   const frames: CaptureFrame[] = timestamps.map((t, idx) => ({
     index: idx,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import type { ParsedCapture, CaptureFrame, HumanoidFrame, GhostInterpolationStats } from "@/lib/pkg/types";
+import type { ParsedCapture, CaptureFrame, HumanoidFrame } from "@/lib/pkg/types";
 import { usePlayback } from "@/hooks/usePlayback";
 import { useVideoSync } from "@/hooks/useVideoSync";
 import type { VideoSyncControls } from "@/hooks/useVideoSync";
@@ -77,11 +77,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const [showHumanoid, setShowHumanoid] = useState(true);
   const showHumanoidRef = useRef(true);
   showHumanoidRef.current = showHumanoid;
-
-  const [ghostInterp, setGhostInterp] = useState(false);
-  const ghostInterpRef = useRef(false);
-  ghostInterpRef.current = ghostInterp;
-  const [ghostCount, setGhostCount] = useState({ right: 0, left: 0 });
 
   // Keep refs so onFrame (memoized) reads the latest toggle values without stale closure
   const followHeadRef = useRef(followHead);
@@ -182,34 +177,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     });
   }, []);
 
-  const triggerIKCompute = useCallback((ghostEnabled: boolean) => {
-    ikCancelRef.current?.();
-    setIkStage("computing");
-    setIkSolved(0);
-    setIkTotal(capture.frames.length);
-    ikCancelRef.current = computeHumanoidIKBackground(
-      capture.frames,
-      (s, t) => { setIkSolved(s); setIkTotal(t); },
-      (humanoidFrames: HumanoidFrame[], stats: GhostInterpolationStats) => {
-        humanoidFramesRef.current = humanoidFrames;
-        setIkStage("ready");
-        setGhostCount({ right: stats.rightGhostCount, left: stats.leftGhostCount });
-        if (threeRef.current && !threeRef.current.humanoid) {
-          threeRef.current.humanoid = makeHumanoidScene(threeRef.current.scene);
-        }
-      },
-      ghostEnabled,
-    );
-  }, [capture.frames]);
-
-  const handleToggleGhostInterp = useCallback(() => {
-    setGhostInterp(prev => {
-      const next = !prev;
-      triggerIKCompute(next);
-      return next;
-    });
-  }, [triggerIKCompute]);
-
   const handleToggle = useCallback(() => {
     setFollowHead(prev => {
       const next = !prev;
@@ -279,15 +246,13 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
             ikCancelRef.current = computeHumanoidIKBackground(
               capture.frames,
               (s, t) => { setIkSolved(s); setIkTotal(t); },
-              (humanoidFrames: HumanoidFrame[], stats: GhostInterpolationStats) => {
+              (humanoidFrames: HumanoidFrame[]) => {
                 humanoidFramesRef.current = humanoidFrames;
                 setIkStage("ready");
-                setGhostCount({ right: stats.rightGhostCount, left: stats.leftGhostCount });
                 if (threeRef.current) {
                   threeRef.current.humanoid = makeHumanoidScene(threeRef.current.scene);
                 }
-              },
-              ghostInterpRef.current,
+              }
             );
           } else {
             setIkStage("skipped");
@@ -391,37 +356,6 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
                   ].join(" ")}
                 />
               </button>
-            </div>
-          )}
-
-          {/* Ghost interpolation toggle — only shown when IK is ready */}
-          {ikStage === "ready" && (
-            <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
-              <span className="text-xs text-zinc-400 select-none">Ghost Interp</span>
-              <button
-                onClick={handleToggleGhostInterp}
-                className={[
-                  "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
-                  "transition-colors duration-200 focus:outline-none",
-                  ghostInterp ? "bg-amber-500" : "bg-zinc-600",
-                ].join(" ")}
-                role="switch"
-                aria-checked={ghostInterp}
-                title={ghostInterp ? "Ghost interpolation on — click to disable" : "Ghost interpolation off — click to enable"}
-              >
-                <span
-                  className={[
-                    "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
-                    "transform transition duration-200",
-                    ghostInterp ? "translate-x-4" : "translate-x-0",
-                  ].join(" ")}
-                />
-              </button>
-              {ghostInterp && (
-                <span className="text-xs font-mono text-amber-400">
-                  R {ghostCount.right} / L {ghostCount.left}
-                </span>
-              )}
             </div>
           )}
 

@@ -83,11 +83,6 @@ export interface HumanoidArmAngles {
   lReachable: boolean;
 }
 
-export interface GhostInterpolationStats {
-  rightGhostCount: number;
-  leftGhostCount: number;
-}
-
 // Per-frame humanoid pose: torso driven from devicePose, arms from IK.
 export interface HumanoidFrame {
   frameIndex: number;
