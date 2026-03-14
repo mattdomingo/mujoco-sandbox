@@ -55,6 +55,13 @@ export interface DevicePose {
   qx: number; qy: number; qz: number; qw: number; // orientation
 }
 
+// World-space pose of a tracked object anchor (object_pose.csv).
+export interface ObjectPose {
+  t: number;          // t_mono timestamp
+  x: number; y: number; z: number;
+  qx: number; qy: number; qz: number; qw: number;
+}
+
 export interface ArmInputTracking {
   wristTracked: boolean;
   elbowHintTracked: boolean;
@@ -66,6 +73,7 @@ export interface CaptureFrame {
   leftHand: HandPose | null;
   rightHand: HandPose | null;
   devicePose: DevicePose | null;  // headset pose at this timestamp (interpolated)
+  objectPose?: ObjectPose;        // tracked object pose at this timestamp (interpolated), if present
   leftArmInput: ArmInputTracking;
   rightArmInput: ArmInputTracking;
 }

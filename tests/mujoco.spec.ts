@@ -50,11 +50,11 @@ test("model loads with correct body and mocap counts", async ({ page }) => {
     };
   });
 
-  // holos_humanoid.xml = humanoid (16 bodies) + 52 hand mocap bodies + pressure_ball + world
-  // Total nbody = 1 (world) + 16 (humanoid) + 52 (hands) + 1 (ball) = 70
-  expect(nbody,     "nbody should be 70 (world + 16 humanoid + 52 hand joints + pressure_ball)").toBe(70);
-  expect(nmocap,    "nmocap should be 52").toBe(52);
-  expect(mocapKeys, "mocapIndex should have 52 entries").toBe(52);
+  // holos_humanoid.xml = humanoid (16 bodies) + 52 hand mocap bodies + pressure_ball + nakamichi_cabinet + world
+  // Total nbody = 1 (world) + 16 (humanoid) + 52 (hands) + 1 (ball) + 1 (nakamichi) = 71
+  expect(nbody,     "nbody should be 71 (world + 16 humanoid + 52 hand joints + pressure_ball + nakamichi_cabinet)").toBe(71);
+  expect(nmocap,    "nmocap should be 53 (52 hand joints + nakamichi_cabinet)").toBe(53);
+  expect(mocapKeys, "mocapIndex should have 53 entries").toBe(53);
   expect(bodyKeys,  "bodyIndex should have at least 69 named bodies").toBeGreaterThanOrEqual(69);
 });
 

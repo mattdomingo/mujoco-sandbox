@@ -20,6 +20,9 @@ export interface MuJoCoInstance {
   leftHandGeomIds: Set<number>;
   // Humanoid body ids for Three.js rendering (read from data.xpos)
   humanoidBodyIds: Map<string, number>;
+  // Nakamichi 610 object body/geom ids (-1 if not injected)
+  nakamichiBodyId: number;
+  nakamichiGeomId: number;
   // qpos addresses for arm hinge joints
   rShoulder1QposAdr: number;
   rShoulder2QposAdr: number;
@@ -106,17 +109,45 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     throw e;
   }
 
-  // ── Stage 3: fetch humanoid model XML ───────────────────────────────────
+  // ── Stage 3: fetch humanoid model XML + hull OBJ ────────────────────────
   report("fetching");
   console.log("[MuJoCo] fetching /models/holos_humanoid.xml");
   let xml: string;
   try {
-    const xmlResponse = await fetch("/models/holos_humanoid.xml");
+    const [xmlResponse, hullResponse] = await Promise.all([
+      fetch("/models/holos_humanoid.xml"),
+      fetch("/models/nakamichi_610_hull.obj"),
+    ]);
     if (!xmlResponse.ok) throw new Error(`HTTP ${xmlResponse.status} fetching /models/holos_humanoid.xml`);
     xml = await xmlResponse.text();
     console.log(`[MuJoCo] XML fetched (${xml.length} chars)`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (mujoco as any).FS.writeFile("/working/holos_humanoid.xml", xml);
+
+    if (hullResponse.ok) {
+      const hullText = await hullResponse.text();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (mujoco as any).FS.writeFile("/working/nakamichi_610_hull.obj", hullText);
+      console.log("[MuJoCo] nakamichi_610_hull.obj written to VFS");
+    } else {
+      console.warn(`[MuJoCo] hull OBJ fetch failed (${hullResponse.status}) — nakamichi physics disabled`);
+    }
+
+    // Inject mocap body into XML before loading.
+    // Uses a box geom (approximate speaker dimensions 30×18×20 cm) — more
+    // reliable than mesh in MuJoCo WASM; the USDZ handles the visual.
+    // Default pos is far above the scene so it does not generate floor contacts
+    // until the first objectPose write.
+    xml = xml.replace(
+      "</worldbody>",
+      `  <body name="nakamichi_cabinet" mocap="true" pos="0 0 10">\n` +
+      `    <geom name="nakamichi_geom" type="box" size="0.15 0.09 0.10"` +
+      ` contype="1" conaffinity="1" rgba="0.4 0.4 0.4 0"/>\n` +
+      `  </body>\n</worldbody>`
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (mujoco as any).FS.writeFile("/working/holos_humanoid.xml", xml);
+    console.log("[MuJoCo] nakamichi_cabinet mocap body injected into XML");
   } catch (e) {
     console.error("[MuJoCo] XML fetch/write failed:", e);
     throw e;
@@ -241,6 +272,23 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     `[MuJoCo] hand geom sets — right=${rightHandGeomIds.size}, left=${leftHandGeomIds.size}`
   );
 
+  // ── Stage 8: index Nakamichi cabinet body + geom ─────────────────────────
+  const OBJ_BODY_CONST: number = m.mjtObj.mjOBJ_BODY.value;
+  const OBJ_GEOM_CONST: number = m.mjtObj.mjOBJ_GEOM.value;
+  const nakamichiBodyId: number = m.mj_name2id(model, OBJ_BODY_CONST, "nakamichi_cabinet");
+  const nakamichiGeomId: number = m.mj_name2id(model, OBJ_GEOM_CONST, "nakamichi_geom");
+
+  if (nakamichiBodyId >= 0) {
+    console.log(`[MuJoCo] nakamichi_cabinet — bodyId=${nakamichiBodyId}, geomId=${nakamichiGeomId}`);
+    // Register in mocapIndex so applyFrame can write poses by name
+    const nakamichiMocapId = model.body_mocapid[nakamichiBodyId];
+    if (nakamichiMocapId >= 0) {
+      mocapIndex.set("nakamichi_cabinet", nakamichiMocapId);
+    }
+  } else {
+    console.warn("[MuJoCo] nakamichi_cabinet body not found — object physics disabled");
+  }
+
   report("ready");
   return {
     mujoco: m,
@@ -253,6 +301,8 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     rightHandGeomIds,
     leftHandGeomIds,
     humanoidBodyIds,
+    nakamichiBodyId,
+    nakamichiGeomId,
     rShoulder1QposAdr,
     rShoulder2QposAdr,
     rElbowQposAdr,
@@ -319,6 +369,21 @@ export function applyFrame(
   if (humanoidFrame) {
     applyTorso(instance, humanoidFrame);
     applyArmIK(instance, humanoidFrame.arms);
+  }
+
+  if (frame.objectPose) {
+    const mid = instance.mocapIndex.get("nakamichi_cabinet");
+    if (mid !== undefined) {
+      const op = frame.objectPose;
+      instance.data.mocap_pos[mid * 3 + 0] = op.x;
+      instance.data.mocap_pos[mid * 3 + 1] = op.y;
+      instance.data.mocap_pos[mid * 3 + 2] = op.z;
+      // xyzw → wxyz for MuJoCo
+      instance.data.mocap_quat[mid * 4 + 0] = op.qw;
+      instance.data.mocap_quat[mid * 4 + 1] = op.qx;
+      instance.data.mocap_quat[mid * 4 + 2] = op.qy;
+      instance.data.mocap_quat[mid * 4 + 3] = op.qz;
+    }
   }
 
   instance.mujoco.mj_forward(instance.model, instance.data);

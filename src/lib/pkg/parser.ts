@@ -1,4 +1,4 @@
-import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose, ArmInputTracking } from "./types";
+import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose, ObjectPose, ArmInputTracking } from "./types";
 import { HAND_JOINT_NAMES, JOINT_COUNT } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -121,6 +121,63 @@ function interpolateDevicePoses(poses: DevicePose[], timestamps: number[]): (Dev
       qy: lerp(a.qy, b.qy),
       qz: lerp(a.qz, b.qz),
       qw: lerp(a.qw, b.qw),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Object pose parsing + interpolation
+// ---------------------------------------------------------------------------
+
+function parseObjectPoseCsv(csv: string): ObjectPose[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(",").map(h => h.trim());
+  const col = (name: string) => headers.indexOf(name);
+  const tIdx = col("t_mono");
+  const xIdx = col("x"), yIdx = col("y"), zIdx = col("z");
+  const qxIdx = col("qx"), qyIdx = col("qy"), qzIdx = col("qz"), qwIdx = col("qw");
+
+  const poses: ObjectPose[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i].trim().split(",");
+    if (row.length < 8) continue;
+    const t = parseFloat(row[tIdx]);
+    const x = parseFloat(row[xIdx]), y = parseFloat(row[yIdx]), z = parseFloat(row[zIdx]);
+    const qx = parseFloat(row[qxIdx]), qy = parseFloat(row[qyIdx]);
+    const qz = parseFloat(row[qzIdx]), qw = parseFloat(row[qwIdx]);
+    if ([t, x, y, z, qx, qy, qz, qw].some(isNaN)) continue;
+    poses.push({ t, x, y, z, qx, qy, qz, qw });
+  }
+  return poses;
+}
+
+function interpolateObjectPoses(poses: ObjectPose[], timestamps: number[]): (ObjectPose | undefined)[] {
+  if (poses.length === 0) return timestamps.map(() => undefined);
+
+  return timestamps.map((ts) => {
+    let lo = 0, hi = poses.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (poses[mid].t < ts) lo = mid + 1;
+      else hi = mid;
+    }
+
+    if (lo === 0) return poses[0];
+    if (lo >= poses.length) return poses[poses.length - 1];
+
+    const a = poses[lo - 1];
+    const b = poses[lo];
+    const range = b.t - a.t;
+    const alpha = range < 1e-9 ? 0 : (ts - a.t) / range;
+    const lerp = (v0: number, v1: number) => v0 + (v1 - v0) * alpha;
+
+    return {
+      t: ts,
+      x: lerp(a.x, b.x), y: lerp(a.y, b.y), z: lerp(a.z, b.z),
+      qx: lerp(a.qx, b.qx), qy: lerp(a.qy, b.qy),
+      qz: lerp(a.qz, b.qz), qw: lerp(a.qw, b.qw),
     };
   });
 }
@@ -261,6 +318,17 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
     } catch { /* non-fatal */ }
   }
 
+  // Parse object pose CSV — optional, tracks a physical object's world pose
+  let objectPoses: (ObjectPose | undefined)[] = timestamps.map(() => undefined);
+  const objectPoseFile = findFile(files, "tracking/object_pose.csv");
+  if (objectPoseFile) {
+    try {
+      const rawObjectPoses = parseObjectPoseCsv(await objectPoseFile.text());
+      objectPoses = interpolateObjectPoses(rawObjectPoses, timestamps);
+      console.log(`[parser] object_pose — ${rawObjectPoses.length} raw samples, interpolated to ${timestamps.length} frames`);
+    } catch { /* non-fatal */ }
+  }
+
   // Left and right rows arrive at slightly different t_mono values, so most
   // entries have only one hand. Build sparse arrays then interpolate across
   // gaps so hands move smoothly through tracking drop-outs instead of freezing.
@@ -287,6 +355,7 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
     leftHand:  interpLeft[idx],
     rightHand: interpRight[idx],
     devicePose: devicePoses[idx],
+    objectPose: objectPoses[idx],
     leftArmInput: leftArmInput[idx],
     rightArmInput: rightArmInput[idx],
   }));

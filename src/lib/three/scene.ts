@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
-import type { CaptureFrame, DevicePose, HumanoidFrame } from "@/lib/pkg/types";
+import type { CaptureFrame, DevicePose, HumanoidFrame, ObjectPose } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 
 // Bone connections: pairs of joint indices (into HAND_JOINT_NAMES)
@@ -43,6 +44,7 @@ export interface ThreeScene {
   pressureBall: THREE.Mesh;
   headFacingIndicator: THREE.Mesh;
   humanoid: HumanoidScene | null;
+  scannedObject: THREE.Group | null;
   dispose:   () => void;
 }
 
@@ -226,6 +228,7 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
     pressureBall,
     headFacingIndicator,
     humanoid: null,
+    scannedObject: null,
     dispose,
   };
 }
@@ -665,4 +668,24 @@ export function setControlsDistance(threeScene: ThreeScene, dist: number) {
     .normalize();
   camera.position.copy(controls.target).addScaledVector(dir, dist);
   controls.update();
+}
+
+// ---------------------------------------------------------------------------
+// Scanned object (USDZ) — loaded async, pose driven from objectPose each frame
+// ---------------------------------------------------------------------------
+
+export async function loadScannedObject(threeScene: ThreeScene, url: string): Promise<void> {
+  const loader = new USDLoader();
+  const group = await loader.loadAsync(url) as THREE.Group;
+  threeScene.scene.add(group);
+  threeScene.scannedObject = group;
+  console.log("[ScannedObject] USDZ loaded and added to scene");
+}
+
+export function updateScannedObject(threeScene: ThreeScene, objectPose: ObjectPose): void {
+  const { scannedObject } = threeScene;
+  if (!scannedObject) return;
+  scannedObject.position.set(objectPose.x, objectPose.y, objectPose.z);
+  // THREE.Quaternion constructor is (x, y, z, w) — matches ObjectPose xyzw fields
+  scannedObject.quaternion.set(objectPose.qx, objectPose.qy, objectPose.qz, objectPose.qw);
 }

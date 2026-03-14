@@ -18,6 +18,8 @@ import {
   updatePressureBall,
   makeHumanoidScene,
   setControlsDistance,
+  loadScannedObject,
+  updateScannedObject,
 } from "@/lib/three/scene";
 import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
@@ -97,6 +99,10 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       try {
         const humanoidFrame = humanoidFramesRef.current?.[frame.index];
         applyFrame(mujocoRef.current, frame, humanoidFrame);
+
+        if (frame.objectPose) {
+          updateScannedObject(threeRef.current, frame.objectPose);
+        }
 
         // Build violation set for red coloring — untracked OR clamped joints
         const violatedBodies = new Set<string>();
@@ -259,6 +265,12 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     rafId = requestAnimationFrame(() => {
       three = initThreeScene(canvas);
       threeRef.current = three;
+
+      const hasObjectPose = capture.frames.some(f => f.objectPose !== undefined);
+      if (hasObjectPose) {
+        loadScannedObject(three, "/models/nakamichi_610.usdz")
+          .catch((err) => console.warn("[ScannedObject] USDZ load failed:", err));
+      }
 
       three.controls.enabled = !followHeadRef.current;
       setZoomDistance(three.controls.getDistance());
