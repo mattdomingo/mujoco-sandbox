@@ -103,6 +103,7 @@ export interface HumanoidArmAngles {
 export interface HumanoidFrame {
   frameIndex: number;
   torsoPos: [number, number, number];
-  torsoQuat: [number, number, number, number]; // wxyz
+  torsoQuat: [number, number, number, number]; // wxyz — shoulder yaw + BASE_ROTATION
+  headQuat:  [number, number, number, number]; // wxyz — full AVP head orientation relative to refYaw (Y-up world space)
   arms: HumanoidArmAngles;
 }

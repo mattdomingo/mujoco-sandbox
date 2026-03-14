@@ -144,7 +144,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           showHumanoidRef.current,
           violatedBodies,
           frame.devicePose,
-          showHeadFacingRef.current
+          showHeadFacingRef.current,
+          humanoidFrame
         );
       } catch (e) {
         console.error("MuJoCo frame error, falling back to raw render:", e);

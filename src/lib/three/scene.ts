@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
-import type { CaptureFrame, DevicePose } from "@/lib/pkg/types";
+import type { CaptureFrame, DevicePose, HumanoidFrame } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 
 // Bone connections: pairs of joint indices (into HAND_JOINT_NAMES)
@@ -530,7 +530,8 @@ function syncHeadFacingIndicator(
 export function renderHumanoidFromMujoco(
   humanoidScene: HumanoidScene,
   instance: MuJoCoInstance,
-  violatedBodies?: Set<string>
+  violatedBodies?: Set<string>,
+  humanoidFrame?: HumanoidFrame
 ) {
   const { data, humanoidBodyIds, mocapIndex } = instance;
   const { joints, bones, segmentPairs } = humanoidScene;
@@ -575,6 +576,15 @@ export function renderHumanoidFromMujoco(
     const boneMat = bones[i].material as THREE.MeshStandardMaterial;
     boneMat.color.copy(violated ? _colorViolation : _colorNormal);
   }
+
+  // Override head mesh quaternion with full AVP head orientation (independent from torso)
+  if (humanoidFrame?.headQuat) {
+    const headMesh = joints.get("head");
+    if (headMesh?.visible) {
+      const [w, x, y, z] = humanoidFrame.headQuat;
+      headMesh.quaternion.set(x, y, z, w); // THREE uses xyzw
+    }
+  }
 }
 
 export function renderFromMujoco(
@@ -584,7 +594,8 @@ export function renderFromMujoco(
   showHumanoid = true,
   violatedBodies?: Set<string>,
   devicePose: DevicePose | null = null,
-  showHeadFacing = false
+  showHeadFacing = false,
+  humanoidFrame?: HumanoidFrame
 ) {
   const { renderer, scene, camera, controls, rightHand, leftHand } = threeScene;
   const hideForarm = threeScene.humanoid !== null && showHumanoid;
@@ -592,7 +603,7 @@ export function renderFromMujoco(
   syncHandFromMujoco(leftHand,  instance, "l_", readMode, hideForarm);
   if (threeScene.humanoid) {
     if (showHumanoid) {
-      renderHumanoidFromMujoco(threeScene.humanoid, instance, violatedBodies);
+      renderHumanoidFromMujoco(threeScene.humanoid, instance, violatedBodies, humanoidFrame);
       const headMesh = threeScene.humanoid.joints.get("head");
       if (showHeadFacing && headMesh?.visible) {
         syncHeadFacingIndicator(threeScene, headMesh.position, devicePose);

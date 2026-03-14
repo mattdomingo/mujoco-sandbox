@@ -58,6 +58,7 @@ const _headQuat   = new THREE.Quaternion();
 const _fwd        = new THREE.Vector3();
 const _yawQuat    = new THREE.Quaternion();
 const _torsoOffset = new THREE.Vector3();
+const _refYawQuat = new THREE.Quaternion();
 
 /** Extract horizontal yaw angle (radians) from an AVP device pose quaternion. */
 function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
@@ -67,6 +68,25 @@ function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
   if (_fwd.lengthSq() < 1e-6) return 0;
   _fwd.normalize();
   return Math.atan2(_fwd.x, -_fwd.z);
+}
+
+/**
+ * Compute forward yaw from the midpoint direction perpendicular to the left→right wrist vector.
+ * Returns null if either wrist is missing or the vector is degenerate.
+ */
+function computeHandMidpointYaw(
+  leftWrist: JointPose | null | undefined,
+  rightWrist: JointPose | null | undefined
+): number | null {
+  if (!leftWrist || !rightWrist) return null;
+  const dx = rightWrist.px - leftWrist.px;
+  const dz = rightWrist.pz - leftWrist.pz;
+  // cross(up=(0,1,0), (dx,_,dz)) = (-dz, 0, dx)
+  const fx = -dz;
+  const fz = dx;
+  const len = Math.sqrt(fx * fx + fz * fz);
+  if (len < 1e-4) return null;
+  return Math.atan2(fx / len, -(fz / len));
 }
 
 /**
@@ -84,32 +104,31 @@ function buildTorsoPos(
 }
 
 /**
- * Build the torso quaternion (wxyz for MuJoCo freejoint qpos).
- * Extracts horizontal yaw relative to the frame-0 reference, then composes
- * with BASE_ROTATION so the humanoid stands upright and faces correctly.
+ * Build the torso quaternion from a pre-computed absolute shoulder yaw.
+ * Used when shoulder yaw comes from hand midpoint rather than head gaze.
  */
-function buildTorsoQuat(
+function buildTorsoQuatFromYaw(
+  absoluteYaw: number,
+  refYaw: number
+): [number, number, number, number] {
+  const relYaw = -(absoluteYaw - refYaw);
+  _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
+  const result = _yawQuat.clone().multiply(BASE_ROTATION);
+  return [result.w, result.x, result.y, result.z];
+}
+
+/**
+ * Build the head quaternion (wxyz) in Y-up world space, relative to refYaw.
+ * This is the full AVP head orientation — pitch + yaw + roll — for Three.js display.
+ * Does NOT apply BASE_ROTATION (this is Three.js, not MuJoCo).
+ */
+function buildHeadQuat(
   qx: number, qy: number, qz: number, qw: number,
   refYaw: number
 ): [number, number, number, number] {
   _headQuat.set(qx, qy, qz, qw).normalize();
-  _fwd.set(0, 0, -1).applyQuaternion(_headQuat);
-  _fwd.y = 0;
-
-  let yaw: number;
-  if (_fwd.lengthSq() < 1e-6) {
-    yaw = refYaw;
-  } else {
-    _fwd.normalize();
-    yaw = Math.atan2(_fwd.x, -_fwd.z);
-  }
-
-  // Negative because Ry(+θ) rotates humanoid forward rightward, but positive
-  // atan2 yaw means the user turned left.
-  const relYaw = -(yaw - refYaw);
-  _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
-
-  const result = _yawQuat.clone().multiply(BASE_ROTATION);
+  _refYawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -refYaw);
+  const result = _refYawQuat.clone().multiply(_headQuat);
   return [result.w, result.x, result.y, result.z];
 }
 
@@ -212,11 +231,22 @@ export function computeHumanoidIKBackground(
   let prevLeft: ResolvedArmState | undefined;
   const total = frames.length;
 
-  // Reference yaw from first frame that has device pose
-  const firstDp = frames.find(f => f.devicePose)?.devicePose ?? null;
-  const refYaw = firstDp
-    ? extractYaw(firstDp.qx, firstDp.qy, firstDp.qz, firstDp.qw)
-    : 0;
+  // Prefer hand-midpoint yaw at frame 0 for calibration; fall back to head yaw
+  const frame0 = frames[0];
+  const f0LeftWrist  = frame0?.leftHand?.[WRIST_IDX]  ?? null;
+  const f0RightWrist = frame0?.rightHand?.[WRIST_IDX] ?? null;
+  const handYaw0 = computeHandMidpointYaw(f0LeftWrist, f0RightWrist);
+  let refYaw: number;
+  if (handYaw0 !== null) {
+    refYaw = handYaw0;
+  } else {
+    const firstDp = frames.find(f => f.devicePose)?.devicePose ?? null;
+    refYaw = firstDp
+      ? extractYaw(firstDp.qx, firstDp.qy, firstDp.qz, firstDp.qw)
+      : 0;
+  }
+
+  let prevShoulderYaw: number = refYaw;
 
   function processBatch() {
     const end = Math.min(solved + BATCH_SIZE, total);
@@ -230,15 +260,25 @@ export function computeHumanoidIKBackground(
         ? buildTorsoPos(dp.x, dp.y, dp.z, dp.qx, dp.qy, dp.qz, dp.qw)
         : [0, 1.0, 0];
 
-      // Torso orientation: upright + yaw only
-      const torsoQuat: [number, number, number, number] = dp
-        ? buildTorsoQuat(dp.qx, dp.qy, dp.qz, dp.qw, refYaw)
-        : baseWXYZ;
-
       // Arm-driving inputs come only from tracked forearmWrist + forearmArm.
       // Interpolated hand poses still render, but they do not drive humanoid IK.
       const rWrist = frame.rightHand?.[WRIST_IDX] ?? null;
       const lWrist = frame.leftHand?.[WRIST_IDX] ?? null;
+
+      // Shoulder yaw from hand midpoint direction; fall back to last known value
+      const currentHandYaw = computeHandMidpointYaw(lWrist, rWrist);
+      const shoulderYaw = currentHandYaw !== null ? currentHandYaw : prevShoulderYaw;
+      if (currentHandYaw !== null) prevShoulderYaw = currentHandYaw;
+
+      // Torso orientation: upright + shoulder yaw from hand midpoint
+      const torsoQuat: [number, number, number, number] = dp
+        ? buildTorsoQuatFromYaw(shoulderYaw, refYaw)
+        : baseWXYZ;
+
+      // Full head orientation (pitch + yaw + roll) for Three.js head mesh override
+      const headQuat: [number, number, number, number] = dp
+        ? buildHeadQuat(dp.qx, dp.qy, dp.qz, dp.qw, refYaw)
+        : baseWXYZ;
       const rForearm = frame.rightHand?.[FOREARM_IDX] ?? null;
       const lForearm = frame.leftHand?.[FOREARM_IDX] ?? null;
 
@@ -279,6 +319,7 @@ export function computeHumanoidIKBackground(
         frameIndex: frame.index,
         torsoPos,
         torsoQuat,
+        headQuat,
         arms: {
           rShoulder1: rResolved.shoulder1,
           rShoulder2: rResolved.shoulder2,
