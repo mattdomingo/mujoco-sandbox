@@ -71,7 +71,13 @@ function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
 }
 
 /**
- * Compute forward yaw from the midpoint direction perpendicular to the left→right wrist vector.
+ * Compute the shoulder-alignment yaw from the left→right wrist vector.
+ *
+ * After BASE_ROTATION, the humanoid's shoulder line is along world +X.
+ * Ry(θ) rotates +X to (cos θ, 0, −sin θ).
+ * To align with wrist line (dx, 0, dz), we need:
+ *   cos θ = dx/len,  −sin θ = dz/len  →  θ = atan2(−dz, dx)
+ *
  * Returns null if either wrist is missing or the vector is degenerate.
  */
 function computeHandMidpointYaw(
@@ -81,12 +87,9 @@ function computeHandMidpointYaw(
   if (!leftWrist || !rightWrist) return null;
   const dx = rightWrist.px - leftWrist.px;
   const dz = rightWrist.pz - leftWrist.pz;
-  // cross(up=(0,1,0), (dx,0,dz)) = (dz, 0, -dx)
-  const fx = dz;
-  const fz = -dx;
-  const len = Math.sqrt(fx * fx + fz * fz);
+  const len = Math.sqrt(dx * dx + dz * dz);
   if (len < 1e-4) return null;
-  return Math.atan2(fx / len, -(fz / len));
+  return Math.atan2(-dz, dx);
 }
 
 /**
@@ -231,20 +234,10 @@ export function computeHumanoidIKBackground(
   let prevLeft: ResolvedArmState | undefined;
   const total = frames.length;
 
-  // Prefer hand-midpoint yaw at frame 0 for calibration; fall back to head yaw
-  const frame0 = frames[0];
-  const f0LeftWrist  = frame0?.leftHand?.[WRIST_IDX]  ?? null;
-  const f0RightWrist = frame0?.rightHand?.[WRIST_IDX] ?? null;
-  const handYaw0 = computeHandMidpointYaw(f0LeftWrist, f0RightWrist);
-  let refYaw: number;
-  if (handYaw0 !== null) {
-    refYaw = handYaw0;
-  } else {
-    const firstDp = frames.find(f => f.devicePose)?.devicePose ?? null;
-    refYaw = firstDp
-      ? extractYaw(firstDp.qx, firstDp.qy, firstDp.qz, firstDp.qw)
-      : 0;
-  }
+  // No refYaw subtraction needed — computeHandMidpointYaw returns the absolute
+  // yaw angle that aligns the shoulder line with the wrist-to-wrist direction.
+  // Ry(absoluteYaw) × BASE_ROTATION places shoulders correctly in world space.
+  const refYaw = 0;
 
   let prevShoulderYaw: number = refYaw;
 

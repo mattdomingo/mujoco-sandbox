@@ -14,6 +14,7 @@ import { loadMuJoCo, applyFrame, readContactPressure, readInterHandPressure } fr
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
 import { resolveTrackedArmSide } from "@/lib/mujoco/humanoidIk";
+import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL, UPPER_ARM_LEN, LOWER_ARM_LEN } from "@/lib/mujoco/ik";
 
 declare global {
   interface Window {
@@ -24,6 +25,11 @@ declare global {
       readContactPressure: typeof readContactPressure;
       readInterHandPressure: typeof readInterHandPressure;
       resolveTrackedArmSide: typeof resolveTrackedArmSide;
+      solveArmIK: typeof solveArmIK;
+      R_SHOULDER_LOCAL: [number, number, number];
+      L_SHOULDER_LOCAL: [number, number, number];
+      UPPER_ARM_LEN: number;
+      LOWER_ARM_LEN: number;
     };
   }
 }
@@ -42,6 +48,11 @@ export default function MuJoCoTestPage() {
           readContactPressure,
           readInterHandPressure,
           resolveTrackedArmSide,
+          solveArmIK,
+          R_SHOULDER_LOCAL,
+          L_SHOULDER_LOCAL,
+          UPPER_ARM_LEN,
+          LOWER_ARM_LEN,
         };
         setStatus("ready");
         setDetail(

@@ -28,6 +28,11 @@ import * as THREE from "three";
 export const UPPER_ARM_LEN = 0.18 * Math.sqrt(3); // ≈ 0.3118 m
 export const LOWER_ARM_LEN = 0.18 * Math.sqrt(3); // ≈ 0.3118 m
 
+// Rest-pose supplementary angle at the elbow.
+// upper_arm dir · lower_arm dir = -1/3 for both arms (mirrored geometry).
+// supplement = π - acos(-1/3) ≈ 1.231 rad (70.5°)
+const REST_ELBOW_SUPPLEMENT = Math.PI - Math.acos(-1 / 3);
+
 // ── Joint axes in torso-local (Z-up humanoid) frame ──────────────────────
 export const R_SHOULDER1_AXIS = new THREE.Vector3( 2,  1,  1).normalize();
 export const R_SHOULDER2_AXIS = new THREE.Vector3( 0, -1,  1).normalize();
@@ -125,7 +130,8 @@ export function solveArmIK(
 
   // ── Elbow angle (law of cosines) ─────────────────────────────────────────
   const cosElbowSup = (U * U + L * L - dist * dist) / (2 * U * L);
-  const elbow = Math.PI - Math.acos(clamp(cosElbowSup, -1, 1));
+  const elbowSupplement = Math.PI - Math.acos(clamp(cosElbowSup, -1, 1));
+  const elbow = elbowSupplement - REST_ELBOW_SUPPLEMENT;
 
   const cosInner = (U * U + dist * dist - L * L) / (2 * U * dist);
   const innerAngle = Math.acos(clamp(cosInner, -1, 1));
@@ -236,15 +242,14 @@ export function solveArmIK(
   }
 
   // Shoulder1 (primary swing — up/down elevation)
-  const S1_MIN = -80 * (Math.PI / 180);
+  const S1_MIN = -85 * (Math.PI / 180);  // matches XML class="shoulder" range="-85 60"
   const S1_MAX =  60 * (Math.PI / 180);
   // Shoulder2 (secondary swing — forward/backward reach)
-  // Forward reach (+) is wider than backward reach (-) anatomically
-  const S2_MIN = -30 * (Math.PI / 180);
+  const S2_MIN = -85 * (Math.PI / 180);  // matches XML
   const S2_MAX =  60 * (Math.PI / 180);
-  // Elbow: can only flex, cannot hyperextend
-  const E_MIN = -90 * (Math.PI / 180);
-  const E_MAX =   0 * (Math.PI / 180);
+  // Elbow: negative = flexion, positive = extension beyond rest
+  const E_MIN = -100 * (Math.PI / 180);  // matches XML class="elbow" range="-100 50"
+  const E_MAX =   50 * (Math.PI / 180);
 
   const rawS1 = shoulder1;
   const rawS2 = shoulder2;

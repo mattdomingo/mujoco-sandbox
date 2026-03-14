@@ -648,3 +648,139 @@ test("resolveTrackedArmSide resumes solving when tracked wrist and elbow data re
   expect(result.changed, "a resumed solve should update at least one joint angle").toBe(true);
   expect(typeof result.resumedReachable, "resumed solve should report reachability").toBe("boolean");
 });
+
+// ---------------------------------------------------------------------------
+// Test 17 — IK produces unclamped, reachable results for natural arm poses
+// ---------------------------------------------------------------------------
+test("solveArmIK produces unclamped angles for natural arm poses (arms at sides, reaching forward)", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL, UPPER_ARM_LEN, LOWER_ARM_LEN } = window.__mujocoTest!;
+
+    // BASE_ROTATION quaternion (Ry(90°) * Rx(-90°)) in wxyz
+    // Precomputed: maps MuJoCo Z-up to Y-up world
+    const cosHalf = Math.cos(Math.PI / 4);
+    const sinHalf = Math.sin(Math.PI / 4);
+    // Rx(-90°): (cos(-45°), sin(-45°), 0, 0) = (cosHalf, -sinHalf, 0, 0)
+    // Ry(90°): (cos(45°), 0, sin(45°), 0) = (cosHalf, 0, sinHalf, 0)
+    // Combined Ry*Rx: use quaternion multiply
+    const rx_w = cosHalf, rx_x = -sinHalf, rx_y = 0, rx_z = 0;
+    const ry_w = cosHalf, ry_x = 0, ry_y = sinHalf, ry_z = 0;
+    // q = ry * rx
+    const base_w = ry_w*rx_w - ry_x*rx_x - ry_y*rx_y - ry_z*rx_z;
+    const base_x = ry_w*rx_x + ry_x*rx_w + ry_y*rx_z - ry_z*rx_y;
+    const base_y = ry_w*rx_y - ry_x*rx_z + ry_y*rx_w + ry_z*rx_x;
+    const base_z = ry_w*rx_z + ry_x*rx_y - ry_y*rx_x + ry_z*rx_w;
+    const torsoQuat: [number, number, number, number] = [base_w, base_x, base_y, base_z];
+
+    const torsoPos: [number, number, number] = [0, 1.0, 0];
+
+    // Helper: rotate local pos by torso quat and add torso pos
+    function toWorld(local: [number,number,number]): [number,number,number] {
+      const [qw, qx, qy, qz] = torsoQuat;
+      const [lx, ly, lz] = local;
+      // q * v * q^-1
+      const ix = qw*lx + qy*lz - qz*ly;
+      const iy = qw*ly + qz*lx - qx*lz;
+      const iz = qw*lz + qx*ly - qy*lx;
+      const iw = -qx*lx - qy*ly - qz*lz;
+      const rx = ix*qw + iw*(-qx) + iy*(-qz) - iz*(-qy);
+      const ry = iy*qw + iw*(-qy) + iz*(-qx) - ix*(-qz);
+      const rz = iz*qw + iw*(-qz) + ix*(-qy) - iy*(-qx);
+      return [rx + torsoPos[0], ry + torsoPos[1], rz + torsoPos[2]];
+    }
+
+    const rShoulderWorld = toWorld(R_SHOULDER_LOCAL);
+    const lShoulderWorld = toWorld(L_SHOULDER_LOCAL);
+    const armLen = UPPER_ARM_LEN + LOWER_ARM_LEN;
+
+    // Test case 1: wrists reaching forward at waist height (natural typing/desk pose)
+    // This pose is well within the shoulder joint range.
+    const rWristNatural: [number,number,number] = [
+      rShoulderWorld[0] + 0.05,
+      rShoulderWorld[1] - 0.15,
+      rShoulderWorld[2] - armLen * 0.5
+    ];
+    const rElbowHint: [number,number,number] = [
+      rShoulderWorld[0] + 0.03,
+      rShoulderWorld[1] - 0.2,
+      rShoulderWorld[2] - armLen * 0.25
+    ];
+
+    const lWristNatural: [number,number,number] = [
+      lShoulderWorld[0] - 0.05,
+      lShoulderWorld[1] - 0.15,
+      lShoulderWorld[2] - armLen * 0.5
+    ];
+    const lElbowHint: [number,number,number] = [
+      lShoulderWorld[0] - 0.03,
+      lShoulderWorld[1] - 0.2,
+      lShoulderWorld[2] - armLen * 0.25
+    ];
+
+    const rResult = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rWristNatural, "right", rElbowHint);
+    const lResult = solveArmIK(torsoPos, torsoQuat, L_SHOULDER_LOCAL, lWristNatural, "left", lElbowHint);
+
+    // Test case 2: arms reaching forward at chest height
+    const rWristFwd: [number,number,number] = [
+      rShoulderWorld[0] + 0.1,
+      rShoulderWorld[1] - 0.05,
+      rShoulderWorld[2] - armLen * 0.6
+    ];
+    const rElbowFwd: [number,number,number] = [
+      rShoulderWorld[0] + 0.05,
+      rShoulderWorld[1] - 0.1,
+      rShoulderWorld[2] - armLen * 0.3
+    ];
+    const rFwdResult = solveArmIK(torsoPos, torsoQuat, R_SHOULDER_LOCAL, rWristFwd, "right", rElbowFwd);
+
+    return {
+      rNatural: {
+        s1: rResult.shoulder1, s2: rResult.shoulder2, e: rResult.elbow,
+        reachable: rResult.reachable,
+        s1Clamped: rResult.shoulder1Clamped,
+        s2Clamped: rResult.shoulder2Clamped,
+        eClamped: rResult.elbowClamped,
+      },
+      lNatural: {
+        s1: lResult.shoulder1, s2: lResult.shoulder2, e: lResult.elbow,
+        reachable: lResult.reachable,
+        s1Clamped: lResult.shoulder1Clamped,
+        s2Clamped: lResult.shoulder2Clamped,
+        eClamped: lResult.elbowClamped,
+      },
+      rForward: {
+        s1: rFwdResult.shoulder1, s2: rFwdResult.shoulder2, e: rFwdResult.elbow,
+        reachable: rFwdResult.reachable,
+        s1Clamped: rFwdResult.shoulder1Clamped,
+        s2Clamped: rFwdResult.shoulder2Clamped,
+        eClamped: rFwdResult.elbowClamped,
+      },
+      armLen,
+      rShoulderWorld,
+      lShoulderWorld,
+    };
+  });
+
+  // Natural typing pose: should be reachable and unclamped
+  expect(result.rNatural.reachable, "right arm should be reachable").toBe(true);
+  expect(result.rNatural.s1Clamped, "right shoulder1 should not be clamped").toBe(false);
+  expect(result.rNatural.s2Clamped, "right shoulder2 at side should not be clamped").toBe(false);
+  expect(result.rNatural.eClamped, "right elbow at side should not be clamped").toBe(false);
+
+  expect(result.lNatural.reachable, "left arm at side should be reachable").toBe(true);
+  expect(result.lNatural.s1Clamped, "left shoulder1 at side should not be clamped").toBe(false);
+  expect(result.lNatural.s2Clamped, "left shoulder2 at side should not be clamped").toBe(false);
+  expect(result.lNatural.eClamped, "left elbow at side should not be clamped").toBe(false);
+
+  // Arms reaching forward: should be reachable and unclamped
+  expect(result.rForward.reachable, "right arm forward should be reachable").toBe(true);
+  expect(result.rForward.s1Clamped, "right shoulder1 forward should not be clamped").toBe(false);
+  expect(result.rForward.s2Clamped, "right shoulder2 forward should not be clamped").toBe(false);
+  expect(result.rForward.eClamped, "right elbow forward should not be clamped").toBe(false);
+
+  // Elbow should be non-zero (arm is not at rest pose angle)
+  expect(Math.abs(result.rNatural.e), "right elbow should be bent (non-zero)").toBeGreaterThan(0.01);
+  expect(Math.abs(result.lNatural.e), "left elbow should be bent (non-zero)").toBeGreaterThan(0.01);
+});

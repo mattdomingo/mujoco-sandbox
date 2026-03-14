@@ -98,18 +98,30 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
         const humanoidFrame = humanoidFramesRef.current?.[frame.index];
         applyFrame(mujocoRef.current, frame, humanoidFrame);
 
-        // Build violation set for red coloring
+        // Build violation set for red coloring — untracked OR clamped joints
         const violatedBodies = new Set<string>();
         if (humanoidFrame) {
           const a = humanoidFrame.arms;
           if (!a.rTrackedDataValid) {
             violatedBodies.add("upper_arm_right");
             violatedBodies.add("lower_arm_right");
+          } else {
+            if (a.rShoulder1Clamped || a.rShoulder2Clamped)
+              violatedBodies.add("upper_arm_right");
+            if (a.rElbowClamped)
+              violatedBodies.add("lower_arm_right");
           }
           if (!a.lTrackedDataValid) {
             violatedBodies.add("upper_arm_left");
             violatedBodies.add("lower_arm_left");
+          } else {
+            if (a.lShoulder1Clamped || a.lShoulder2Clamped)
+              violatedBodies.add("upper_arm_left");
+            if (a.lElbowClamped)
+              violatedBodies.add("lower_arm_left");
           }
+          if (!a.rReachable) violatedBodies.add("upper_arm_right");
+          if (!a.lReachable) violatedBodies.add("upper_arm_left");
         }
 
         // Read MuJoCo contact forces and update the ball mesh every frame.
