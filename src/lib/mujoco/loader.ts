@@ -1,6 +1,6 @@
 import type { CaptureFrame, HandPose, HumanoidFrame, HumanoidArmAngles } from "@/lib/pkg/types";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
-import type { MjModel, MjData, MjContact } from "mujoco-js/dist/mujoco_wasm";
+import type { MjModel, MjData } from "mujoco-js/dist/mujoco_wasm";
 
 export interface MuJoCoInstance {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -342,10 +342,19 @@ export interface PressureResult extends ContactForceResult {
 // Reusable Float64Array for mj_contactForce output (6 elements: fx,fy,fz,tx,ty,tz)
 const _forceBuffer = new Float64Array(6);
 
+// Plain-object snapshot of the MjContact fields we need — extracted before
+// calling contact.delete() so the C++ heap object can be freed immediately.
+interface ContactSnapshot {
+  exclude: number;
+  geom1: number;
+  geom2: number;
+  efc_address: number;
+}
+
 function readNormalForce(
   instance: MuJoCoInstance,
   contactIndex: number,
-  contact: MjContact
+  contact: ContactSnapshot
 ): number {
   const { mujoco, model, data } = instance;
 
@@ -362,7 +371,7 @@ function readNormalForce(
 
 function readContactForceSum(
   instance: MuJoCoInstance,
-  includeContact: (contact: MjContact) => boolean
+  includeContact: (contact: ContactSnapshot) => boolean
 ): ContactForceResult {
   const { data } = instance;
   const ncon: number = data.ncon;
@@ -370,8 +379,21 @@ function readContactForceSum(
   let contactCount = 0;
 
   for (let c = 0; c < ncon; c++) {
-    const contact = data.contact.get(c);
-    if (!contact) continue;
+    const raw = data.contact.get(c);
+    if (!raw) continue;
+
+    // Extract all needed fields then free the C++ heap object immediately.
+    // Without .delete(), each .get() allocates a new C++ wrapper that is never
+    // GC'd, causing WASM memory to grow unboundedly until it hits the 2 GB
+    // limit and aborts.
+    const contact: ContactSnapshot = {
+      exclude:     raw.exclude,
+      geom1:       raw.geom1,
+      geom2:       raw.geom2,
+      efc_address: raw.efc_address,
+    };
+    raw.delete();
+
     if (contact.exclude !== 0) continue;
     if (!includeContact(contact)) continue;
 
