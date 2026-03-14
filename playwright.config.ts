@@ -18,8 +18,8 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  // Do NOT start the dev server automatically — user must run `npm run dev` first.
-  // This keeps the test run fast and avoids port conflicts.
+  // Start the dev server for tests when needed, but reuse an existing local
+  // server so iterative runs stay fast.
   webServer: {
     command: "npm run dev",
     url: "http://localhost:3000",

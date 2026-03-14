@@ -263,7 +263,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
 }
 
 // Write one hand's joint poses into MuJoCo mocap slots.
-// prefix is "r_" or "l_" matching body names in holos_hands.xml.
+// prefix is "r_" or "l_" matching body names in holos_humanoid.xml.
 function applyHand(instance: MuJoCoInstance, prefix: string, hand: HandPose) {
   const { data, mocapIndex } = instance;
 

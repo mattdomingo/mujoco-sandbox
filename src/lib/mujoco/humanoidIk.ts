@@ -55,20 +55,9 @@ const TORSO_OFFSET_HEAD_LOCAL = new THREE.Vector3(0, -0.25, 0.05);
 
 // Scratch objects
 const _headQuat   = new THREE.Quaternion();
-const _fwd        = new THREE.Vector3();
 const _yawQuat    = new THREE.Quaternion();
 const _torsoOffset = new THREE.Vector3();
 const _refYawQuat = new THREE.Quaternion();
-
-/** Extract horizontal yaw angle (radians) from an AVP device pose quaternion. */
-function extractYaw(qx: number, qy: number, qz: number, qw: number): number {
-  _headQuat.set(qx, qy, qz, qw).normalize();
-  _fwd.set(0, 0, -1).applyQuaternion(_headQuat);
-  _fwd.y = 0;
-  if (_fwd.lengthSq() < 1e-6) return 0;
-  _fwd.normalize();
-  return Math.atan2(_fwd.x, -_fwd.z);
-}
 
 /**
  * Compute the shoulder-alignment yaw from the left→right wrist vector.

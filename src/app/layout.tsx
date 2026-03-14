@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Holos Capture Viewer",
-  description: "MuJoCo WASM replay tool for Holos .pkg capture files",
+  description: "MuJoCo WASM replay tool for Holos .capture folders",
 };
 
 export default function RootLayout({
