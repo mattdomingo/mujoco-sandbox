@@ -94,49 +94,62 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     }
 
     if (mujocoRef.current) {
-      const humanoidFrame = humanoidFramesRef.current?.[frame.index];
-      applyFrame(mujocoRef.current, frame, humanoidFrame);
+      try {
+        const humanoidFrame = humanoidFramesRef.current?.[frame.index];
+        applyFrame(mujocoRef.current, frame, humanoidFrame);
 
-      // Build violation set for red coloring
-      const violatedBodies = new Set<string>();
-      if (humanoidFrame) {
-        const a = humanoidFrame.arms;
-        if (!a.rTrackedDataValid) {
-          violatedBodies.add("upper_arm_right");
-          violatedBodies.add("lower_arm_right");
+        // Build violation set for red coloring
+        const violatedBodies = new Set<string>();
+        if (humanoidFrame) {
+          const a = humanoidFrame.arms;
+          if (!a.rTrackedDataValid) {
+            violatedBodies.add("upper_arm_right");
+            violatedBodies.add("lower_arm_right");
+          }
+          if (!a.lTrackedDataValid) {
+            violatedBodies.add("upper_arm_left");
+            violatedBodies.add("lower_arm_left");
+          }
         }
-        if (!a.lTrackedDataValid) {
-          violatedBodies.add("upper_arm_left");
-          violatedBodies.add("lower_arm_left");
+
+        // Read MuJoCo contact forces and update the ball mesh every frame.
+        // Wrapped in try/catch: if WASM throws (e.g. memory exhaustion from a
+        // prior leak), we skip the pressure update but keep the render loop alive.
+        let ballResult = { pressure: 0, contactCount: 0, ballPos: [0, 0.9, 0.5] as [number, number, number] };
+        let handResult = { pressure: 0, contactCount: 0 };
+        try {
+          ballResult = readContactPressure(mujocoRef.current);
+          handResult = readInterHandPressure(mujocoRef.current);
+        } catch (e) {
+          console.error("Contact force read failed:", e);
         }
+        updatePressureBall(threeRef.current, ballResult.ballPos, ballResult.pressure);
+
+        // Sync React state at ~10fps (every 6 frames at 60fps) to avoid excessive re-renders
+        pressureFrameRef.current++;
+        if (pressureFrameRef.current % 6 === 0) {
+          setBallPressure(ballResult.pressure);
+          setBallContactCount(ballResult.contactCount);
+          setHandPressure(handResult.pressure);
+          setHandContactCount(handResult.contactCount);
+          if (!followHeadRef.current) {
+            setZoomDistance(threeRef.current.controls.getDistance());
+          }
+        }
+
+        renderFromMujoco(
+          threeRef.current,
+          mujocoRef.current,
+          readModeRef.current,
+          showHumanoidRef.current,
+          violatedBodies,
+          frame.devicePose,
+          showHeadFacingRef.current
+        );
+      } catch (e) {
+        console.error("MuJoCo frame error, falling back to raw render:", e);
+        renderFromFrame(threeRef.current, frame);
       }
-
-      // Read MuJoCo contact forces and update the ball mesh every frame.
-      const ballResult = readContactPressure(mujocoRef.current);
-      const handResult = readInterHandPressure(mujocoRef.current);
-      updatePressureBall(threeRef.current, ballResult.ballPos, ballResult.pressure);
-
-      // Sync React state at ~10fps (every 6 frames at 60fps) to avoid excessive re-renders
-      pressureFrameRef.current++;
-      if (pressureFrameRef.current % 6 === 0) {
-        setBallPressure(ballResult.pressure);
-        setBallContactCount(ballResult.contactCount);
-        setHandPressure(handResult.pressure);
-        setHandContactCount(handResult.contactCount);
-        if (!followHeadRef.current) {
-          setZoomDistance(threeRef.current.controls.getDistance());
-        }
-      }
-
-      renderFromMujoco(
-        threeRef.current,
-        mujocoRef.current,
-        readModeRef.current,
-        showHumanoidRef.current,
-        violatedBodies,
-        frame.devicePose,
-        showHeadFacingRef.current
-      );
     } else {
       renderFromFrame(threeRef.current, frame);
     }
