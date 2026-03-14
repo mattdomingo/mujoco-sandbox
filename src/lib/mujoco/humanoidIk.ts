@@ -81,9 +81,9 @@ function computeHandMidpointYaw(
   if (!leftWrist || !rightWrist) return null;
   const dx = rightWrist.px - leftWrist.px;
   const dz = rightWrist.pz - leftWrist.pz;
-  // cross(up=(0,1,0), (dx,_,dz)) = (-dz, 0, dx)
-  const fx = -dz;
-  const fz = dx;
+  // cross(up=(0,1,0), (dx,0,dz)) = (dz, 0, -dx)
+  const fx = dz;
+  const fz = -dx;
   const len = Math.sqrt(fx * fx + fz * fz);
   if (len < 1e-4) return null;
   return Math.atan2(fx / len, -(fz / len));
@@ -111,7 +111,7 @@ function buildTorsoQuatFromYaw(
   absoluteYaw: number,
   refYaw: number
 ): [number, number, number, number] {
-  const relYaw = -(absoluteYaw - refYaw);
+  const relYaw = absoluteYaw - refYaw;
   _yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
   const result = _yawQuat.clone().multiply(BASE_ROTATION);
   return [result.w, result.x, result.y, result.z];
