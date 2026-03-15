@@ -40,13 +40,11 @@ export default function MetadataPanel({ capture }: MetadataPanelProps) {
         <Row label="Audio" value={capture.audio ? "Present" : "None"} />
       </div>
 
-      {/* TODO: Display timecoded transcript */}
-      {/* Each entry from timecoded_transcript.json has: isFinal, text, tokens[{startSec, endSec, text}] */}
       {capture.transcript && (
         <div className="flex flex-col gap-2 px-4 pb-4 border-t border-zinc-800 pt-4">
           <span className="text-xs text-zinc-500 uppercase tracking-wider">Transcript</span>
           <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap">
-            {capture.transcript}
+            {capture.transcript.map(s => s.text).join(" ")}
           </p>
         </div>
       )}

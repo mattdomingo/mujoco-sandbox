@@ -78,11 +78,24 @@ export interface CaptureFrame {
   rightArmInput: ArmInputTracking;
 }
 
+export interface TranscriptToken {
+  startSec: number;
+  endSec: number;
+  text: string;
+}
+
+export interface TranscriptSegment {
+  text: string;
+  tokens: TranscriptToken[];
+  startSec: number;   // tokens[0].startSec — denormalized for O(1) range check
+  endSec: number;     // tokens[last].endSec
+}
+
 export interface ParsedCapture {
   metadata: CaptureMetadata;
   frames: CaptureFrame[];
   audio: Blob | null;
-  transcript: string | null;
+  transcript: TranscriptSegment[] | null;
   video: File | null;   // camera_left.mov
 }
 

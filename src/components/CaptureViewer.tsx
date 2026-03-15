@@ -5,6 +5,9 @@ import type { ParsedCapture, CaptureFrame, HumanoidFrame } from "@/lib/pkg/types
 import { usePlayback } from "@/hooks/usePlayback";
 import { useVideoSync } from "@/hooks/useVideoSync";
 import type { VideoSyncControls } from "@/hooks/useVideoSync";
+import { useAudioSync } from "@/hooks/useAudioSync";
+import type { AudioSyncControls } from "@/hooks/useAudioSync";
+import ClosedCaptions from "./ClosedCaptions";
 import { loadMuJoCo, applyFrame, mujocoTimeoutMs, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance, MuJoCoStage } from "@/lib/mujoco/loader";
 import { computeHumanoidIKBackground } from "@/lib/mujoco/humanoidIk";
@@ -77,6 +80,14 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
   const videoRef     = useRef<HTMLVideoElement | null>(null);
   const videoSyncRef = useRef<VideoSyncControls | null>(null);
 
+  const audioRef     = useRef<HTMLAudioElement | null>(null);
+  const audioSyncRef = useRef<AudioSyncControls | null>(null);
+  const [showCaptions, setShowCaptions] = useState(false);
+  const showCaptionsRef = useRef(false);
+  showCaptionsRef.current = showCaptions;
+  const [captureTimeSec, setCaptureTimeSec] = useState(0);
+  const captureTimeSecRef = useRef(0);
+
   const [showHumanoid, setShowHumanoid] = useState(true);
   const showHumanoidRef = useRef(true);
   showHumanoidRef.current = showHumanoid;
@@ -91,6 +102,8 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
   const onFrame = useCallback((frame: CaptureFrame) => {
     if (!threeRef.current) return;
+
+    captureTimeSecRef.current = frame.timestamp - capture.frames[0].timestamp;
 
     if (followHeadRef.current && frame.devicePose) {
       applyCameraFromDevicePose(threeRef.current, frame);
@@ -154,6 +167,9 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
           if (!followHeadRef.current) {
             setZoomDistance(threeRef.current.controls.getDistance());
           }
+          if (showCaptionsRef.current && capture.transcript) {
+            setCaptureTimeSec(captureTimeSecRef.current);
+          }
         }
 
         renderFromMujoco(
@@ -173,7 +189,7 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     } else {
       renderFromFrame(threeRef.current, frame);
     }
-  }, []);
+  }, [capture]);
 
   // Pass videoRef so the rAF tick drives Three.js from video.currentTime
   const [playbackState, rawPlaybackControls] = usePlayback(capture, onFrame, capture.video ? videoRef : undefined);
@@ -186,9 +202,21 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
     return () => URL.revokeObjectURL(url);
   }, [capture.video]);
 
+  // Bind audio file to the <audio> element via an Object URL
+  useEffect(() => {
+    if (!audioRef.current || !capture.audio) return;
+    const url = URL.createObjectURL(capture.audio);
+    audioRef.current.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [capture.audio]);
+
   // Video sync controls — just play/pause/seek the video element
   const videoSync = useVideoSync(videoRef);
   videoSyncRef.current = videoSync;
+
+  // Audio sync controls
+  const audioSync = useAudioSync(audioRef);
+  audioSyncRef.current = audioSync;
 
   // Wrap playback controls to drive the video alongside Three.js
   const handlePlay = useCallback(() => {
@@ -198,22 +226,25 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
       ? frame.timestamp - capture.frames[0].timestamp
       : 0;
     videoSyncRef.current?.onPlay(captureTime);
+    audioSyncRef.current?.onPlay(captureTime);
     rawPlaybackControls.play();
   }, [rawPlaybackControls, capture, playbackState.frameIndexRef]);
 
   const handlePause = useCallback(() => {
     videoSyncRef.current?.onPause();
+    audioSyncRef.current?.onPause();
     rawPlaybackControls.pause();
   }, [rawPlaybackControls]);
 
   const handleSeek = useCallback((index: number) => {
     rawPlaybackControls.seek(index);
-    // Map frame index → actual capture elapsed time for the video seek
+    // Map frame index → actual capture elapsed time for the video/audio seek
     const frame = capture.frames[index];
     const captureTime = frame
       ? frame.timestamp - capture.frames[0].timestamp
       : 0;
     videoSyncRef.current?.onSeek(captureTime);
+    audioSyncRef.current?.onSeek(captureTime);
   }, [rawPlaybackControls, capture]);
 
   const playbackControls = {
@@ -412,6 +443,15 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
         {/* Humanoid IK progress */}
         <IKStatus stage={ikStage} solved={ikSolved} total={ikTotal} />
 
+        {/* Closed captions overlay */}
+        {capture.transcript && (
+          <ClosedCaptions
+            segments={capture.transcript}
+            captureTimeSec={captureTimeSec}
+            visible={showCaptions}
+          />
+        )}
+
         {/* Pressure display — only shown when MuJoCo is running */}
         {mujocoReady && (
           <div className="absolute bottom-16 right-3 flex flex-col gap-3">
@@ -432,6 +472,30 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
 
         {/* Top-right controls row */}
         <div className="absolute top-3 right-3 flex items-center gap-2">
+          {/* Closed captions toggle — only shown when transcript is present */}
+          {capture.transcript && (
+            <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
+              <span className="text-xs text-zinc-400 select-none">CC</span>
+              <button
+                onClick={() => setShowCaptions(v => !v)}
+                className={[
+                  "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent",
+                  "transition-colors duration-200 focus:outline-none",
+                  showCaptions ? "bg-yellow-500" : "bg-zinc-600",
+                ].join(" ")}
+                role="switch"
+                aria-checked={showCaptions}
+                title={showCaptions ? "Captions on" : "Captions off"}
+              >
+                <span className={[
+                  "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow",
+                  "transform transition duration-200",
+                  showCaptions ? "translate-x-4" : "translate-x-0",
+                ].join(" ")} />
+              </button>
+            </div>
+          )}
+
           {/* Head-facing line toggle */}
           {hasDevicePose && ikStage === "ready" && (
             <div className="flex items-center gap-2 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 rounded-lg px-3 py-2">
@@ -579,6 +643,11 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
               }
             />
           </>
+        )}
+
+        {/* Hidden audio element — synced via useAudioSync */}
+        {capture.audio && (
+          <audio ref={audioRef} preload="auto" style={{ display: "none" }} />
         )}
 
         {/* Read mode toggle */}

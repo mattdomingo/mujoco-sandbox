@@ -1,4 +1,4 @@
-import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose, ObjectPose, ArmInputTracking } from "./types";
+import type { ParsedCapture, CaptureFrame, HandPose, JointPose, DevicePose, ObjectPose, ArmInputTracking, TranscriptSegment } from "./types";
 import { HAND_JOINT_NAMES, JOINT_COUNT } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -384,12 +384,26 @@ export async function parseCapture(files: FileList): Promise<ParsedCapture> {
   const audio = audioFile ? new Blob([await audioFile.arrayBuffer()], { type: "audio/wav" }) : null;
 
   // transcripts/timecoded_transcript.json — optional
-  let transcript: string | null = null;
+  let transcript: TranscriptSegment[] | null = null;
   const transcriptFile = findFile(files, "transcripts/timecoded_transcript.json");
   if (transcriptFile) {
     try {
-      const segments: { isFinal: boolean; text: string }[] = JSON.parse(await transcriptFile.text());
-      transcript = segments.filter(s => s.isFinal).map(s => s.text).join(" ").trim() || null;
+      const raw: {
+        isFinal: boolean;
+        text: string;
+        tokens: { startSec: number; endSec: number; text: string }[];
+      }[] = JSON.parse(await transcriptFile.text());
+
+      const segments: TranscriptSegment[] = raw
+        .filter(s => s.isFinal && Array.isArray(s.tokens) && s.tokens.length > 0)
+        .map(s => ({
+          text: s.text,
+          tokens: s.tokens.map(tk => ({ startSec: tk.startSec, endSec: tk.endSec, text: tk.text })),
+          startSec: s.tokens[0].startSec,
+          endSec: s.tokens[s.tokens.length - 1].endSec,
+        }));
+
+      transcript = segments.length > 0 ? segments : null;
     } catch { /* ignore malformed transcript */ }
   }
 
