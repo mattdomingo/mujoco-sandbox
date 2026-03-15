@@ -32,6 +32,9 @@ export interface MuJoCoInstance {
   lElbowQposAdr: number;
   // qpos address for spine forward-bend hinge
   abdomenYQposAdr: number;
+  // qpos addresses for hip_y joints (used to counter-rotate legs when spine bends)
+  rHipYQposAdr: number;
+  lHipYQposAdr: number;
 }
 
 export type MuJoCoStage =
@@ -221,12 +224,14 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   const lShoulder2QposAdr = jntQposAdr("shoulder2_left");
   const lElbowQposAdr     = jntQposAdr("elbow_left");
   const abdomenYQposAdr   = jntQposAdr("abdomen_y");
+  const rHipYQposAdr      = jntQposAdr("hip_y_right");
+  const lHipYQposAdr      = jntQposAdr("hip_y_left");
 
   console.log(
     `[MuJoCo] arm joint qpos addresses — ` +
     `rS1=${rShoulder1QposAdr} rS2=${rShoulder2QposAdr} rE=${rElbowQposAdr} ` +
     `lS1=${lShoulder1QposAdr} lS2=${lShoulder2QposAdr} lE=${lElbowQposAdr} ` +
-    `abdomenY=${abdomenYQposAdr}`
+    `abdomenY=${abdomenYQposAdr} rHipY=${rHipYQposAdr} lHipY=${lHipYQposAdr}`
   );
 
   const humanoidBodyNames = [
@@ -314,6 +319,8 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     lShoulder2QposAdr,
     lElbowQposAdr,
     abdomenYQposAdr,
+    rHipYQposAdr,
+    lHipYQposAdr,
   };
 }
 
@@ -354,11 +361,16 @@ function applyTorso(instance: MuJoCoInstance, hf: HumanoidFrame) {
 }
 
 // Write spine forward-bend angle into abdomen_y qpos slot.
+// Counter-rotates hip_y joints by the same amount so legs stay vertical
+// when the torso bends — pelvis tilt from abdomen_y would otherwise splay the legs.
 function applySpine(instance: MuJoCoInstance, hf: HumanoidFrame) {
   if (hf.abdomenY === undefined) return;
-  if (instance.abdomenYQposAdr >= 0) {
-    instance.data.qpos[instance.abdomenYQposAdr] = hf.abdomenY;
+  const { data, abdomenYQposAdr, rHipYQposAdr, lHipYQposAdr } = instance;
+  if (abdomenYQposAdr >= 0) {
+    data.qpos[abdomenYQposAdr] = hf.abdomenY;
   }
+  if (rHipYQposAdr >= 0) data.qpos[rHipYQposAdr] = -hf.abdomenY;
+  if (lHipYQposAdr >= 0) data.qpos[lHipYQposAdr] = -hf.abdomenY;
 }
 
 // Write IK-solved arm hinge angles into their qpos slots.

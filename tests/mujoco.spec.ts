@@ -799,33 +799,33 @@ test("computeBendAngle returns 0 when head is at reference altitude", async ({ p
 });
 
 // ---------------------------------------------------------------------------
-// Test 19 — computeBendAngle returns negative value when head drops (forward bend)
+// Test 19 — computeBendAngle returns positive value when head drops (forward bend)
 // ---------------------------------------------------------------------------
-test("computeBendAngle returns negative angle when head altitude drops", async ({ page }) => {
+test("computeBendAngle returns positive angle when head altitude drops", async ({ page }) => {
   await waitForMuJoCo(page);
 
   const result = await page.evaluate(() => {
-    // drop = 1.5 - 1.25 = 0.25m → raw = -(0.25 * 2.0) = -0.5 rad
+    // drop = 1.5 - 1.25 = 0.25m → raw = 0.25 * 2.0 = +0.5 rad
     return window.__mujocoTest!.computeBendAngle(1.25, 1.5);
   });
 
-  expect(result, "forward bend should produce negative angle").toBeLessThan(0);
-  expect(result, "0.25m drop at BEND_SCALE=2.0 should produce -0.5 rad").toBeCloseTo(-0.5, 4);
+  expect(result, "forward bend should produce positive angle").toBeGreaterThan(0);
+  expect(result, "0.25m drop at BEND_SCALE=2.0 should produce +0.5 rad").toBeCloseTo(0.5, 4);
 });
 
 // ---------------------------------------------------------------------------
-// Test 20 — computeBendAngle clamps at BEND_MIN for large drops
+// Test 20 — computeBendAngle clamps at BEND_MAX for large drops
 // ---------------------------------------------------------------------------
-test("computeBendAngle clamps to -75° when drop is very large", async ({ page }) => {
+test("computeBendAngle clamps to +75° when drop is very large", async ({ page }) => {
   await waitForMuJoCo(page);
 
   const result = await page.evaluate(() => {
-    // drop = 2.0 - 0.0 = 2m → raw = -4 rad → clamp to -75° ≈ -1.3090 rad
+    // drop = 2.0 - 0.0 = 2m → raw = +4 rad → clamp to +75° ≈ +1.3090 rad
     return window.__mujocoTest!.computeBendAngle(0.0, 2.0);
   });
 
-  const expectedMin = -75 * (Math.PI / 180);
-  expect(result, "large drop should clamp to BEND_MIN (-75°)").toBeCloseTo(expectedMin, 4);
+  const expectedMax = 75 * (Math.PI / 180);
+  expect(result, "large drop should clamp to BEND_MAX (+75°)").toBeCloseTo(expectedMax, 4);
 });
 
 // ---------------------------------------------------------------------------
@@ -843,7 +843,7 @@ test("applyFrame writes abdomenY into qpos at abdomenYQposAdr", async ({ page })
       torsoPos: [0, 1.0, 0] as [number, number, number],
       torsoQuat: [1, 0, 0, 0] as [number, number, number, number],
       headQuat:  [1, 0, 0, 0] as [number, number, number, number],
-      abdomenY: -0.35,
+      abdomenY: 0.35,
       arms: {
         rShoulder1: 0, rShoulder2: 0, rElbow: 0,
         rReachable: false, rTrackedDataValid: false,
@@ -870,5 +870,5 @@ test("applyFrame writes abdomenY into qpos at abdomenYQposAdr", async ({ page })
   });
 
   expect(result.abdomenYQposAdr, "abdomenYQposAdr should be a valid (>= 0) qpos index").toBeGreaterThanOrEqual(0);
-  expect(result.written, "qpos[abdomenYQposAdr] should hold the written abdomenY value").toBeCloseTo(-0.35, 4);
+  expect(result.written, "qpos[abdomenYQposAdr] should hold the written abdomenY value").toBeCloseTo(0.35, 4);
 });

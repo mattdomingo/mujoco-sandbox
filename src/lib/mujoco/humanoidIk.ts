@@ -34,8 +34,8 @@ const BATCH_SIZE = 50;
 const IK_SMOOTH_ALPHA = 0.4; // 0 = frozen, 1 = no filter
 
 const BEND_SCALE = 2.0;                        // rad/m
-const BEND_MIN = -75 * (Math.PI / 180);        // max forward flex (negative)
-const BEND_MAX =  30 * (Math.PI / 180);        // max backward arch
+const BEND_MIN = 0;                            // no backward arch — forward-only
+const BEND_MAX =  75 * (Math.PI / 180);        // max forward flex (positive in MuJoCo abdomen_y)
 const REF_ALTITUDE_FRAMES = 10;               // frames to average for reference
 
 function smoothAngle(current: number, prev: number): number {
@@ -131,11 +131,12 @@ function buildHeadQuat(
 
 /**
  * Map a head altitude drop to an abdomen_y hinge angle.
- * Negative result = forward flex (matches MuJoCo abdomen_y range="-75 30").
+ * Positive result = forward flex. MuJoCo's abdomen_y axis (0,1,0) maps to
+ * world -X after BASE_ROTATION, so positive rotation tilts the torso forward.
  */
 export function computeBendAngle(headY: number, referenceAltitude: number): number {
   const drop = referenceAltitude - headY;
-  const raw = -(drop * BEND_SCALE);
+  const raw = drop * BEND_SCALE;
   return raw < BEND_MIN ? BEND_MIN : raw > BEND_MAX ? BEND_MAX : raw;
 }
 
@@ -238,7 +239,9 @@ export function computeHumanoidIKBackground(
   let prevLeft: ResolvedArmState | undefined;
   const total = frames.length;
   let refAltitudeSamples: number[] = [];
+  let refTorsoYSamples: number[] = [];
   let referenceAltitude: number | null = null;
+  let referenceTorsoY: number | null = null;
   let prevAbdomenY = 0;
 
   // No refYaw subtraction needed — computeHandMidpointYaw returns the absolute
@@ -255,18 +258,42 @@ export function computeHumanoidIKBackground(
       const frame = frames[i];
       const dp = frame.devicePose;
 
-      // Torso position: derived from head pose with pitch-aware offset
-      const torsoPos: [number, number, number] = dp
+      // Torso position: derived from head pose with pitch-aware offset.
+      // Clamp Y to the reference standing torso height so feet never go below ground.
+      const rawTorsoPos: [number, number, number] = dp
         ? buildTorsoPos(dp.x, dp.y, dp.z, dp.qx, dp.qy, dp.qz, dp.qw)
         : [0, 1.0, 0];
 
+      if (dp) {
+        refTorsoYSamples.push(rawTorsoPos[1]);
+        if (referenceTorsoY === null && refTorsoYSamples.length >= REF_ALTITUDE_FRAMES) {
+          referenceTorsoY = refTorsoYSamples.reduce((a, b) => a + b, 0) / refTorsoYSamples.length;
+          refTorsoYSamples = [];
+        }
+      }
+
+      const clampedTorsoY = referenceTorsoY !== null ? Math.max(rawTorsoPos[1], referenceTorsoY) : rawTorsoPos[1];
+      const torsoLift = clampedTorsoY - rawTorsoPos[1]; // > 0 when clamped up during a bend
+
+      const torsoPos: [number, number, number] = [rawTorsoPos[0], clampedTorsoY, rawTorsoPos[2]];
+
       // Arm-driving inputs come only from tracked forearmWrist + forearmArm.
       // Interpolated hand poses still render, but they do not drive humanoid IK.
-      const rWrist = frame.rightHand?.[WRIST_IDX] ?? null;
-      const lWrist = frame.leftHand?.[WRIST_IDX] ?? null;
+      // Lift wrist/elbow targets by the same delta applied to the torso so arm
+      // posture stays correct relative to the body when the user bends over.
+      const rawRWrist = frame.rightHand?.[WRIST_IDX] ?? null;
+      const rawLWrist = frame.leftHand?.[WRIST_IDX] ?? null;
+      const rawRForearm = frame.rightHand?.[FOREARM_IDX] ?? null;
+      const rawLForearm = frame.leftHand?.[FOREARM_IDX] ?? null;
+
+      const liftPose = (p: JointPose | null): JointPose | null =>
+        p && torsoLift !== 0 ? { ...p, py: p.py + torsoLift } : p;
+
+      const rWrist  = liftPose(rawRWrist);
+      const lWrist  = liftPose(rawLWrist);
 
       // Shoulder yaw from hand midpoint direction; fall back to last known value
-      const currentHandYaw = computeHandMidpointYaw(lWrist, rWrist);
+      const currentHandYaw = computeHandMidpointYaw(rawLWrist, rawRWrist);
       const shoulderYaw = currentHandYaw !== null ? currentHandYaw : prevShoulderYaw;
       if (currentHandYaw !== null) prevShoulderYaw = currentHandYaw;
 
@@ -279,16 +306,16 @@ export function computeHumanoidIKBackground(
       const headQuat: [number, number, number, number] = dp
         ? buildHeadQuat(dp.qx, dp.qy, dp.qz, dp.qw, refYaw)
         : baseWXYZ;
-      const rForearm = frame.rightHand?.[FOREARM_IDX] ?? null;
-      const lForearm = frame.leftHand?.[FOREARM_IDX] ?? null;
+      const rForearm = liftPose(rawRForearm);
+      const lForearm = liftPose(rawLForearm);
 
       const rInput = frame.rightArmInput ?? {
-        wristTracked: rWrist !== null,
-        elbowHintTracked: rForearm !== null,
+        wristTracked: rawRWrist !== null,
+        elbowHintTracked: rawRForearm !== null,
       };
       const lInput = frame.leftArmInput ?? {
-        wristTracked: lWrist !== null,
-        elbowHintTracked: lForearm !== null,
+        wristTracked: rawLWrist !== null,
+        elbowHintTracked: rawLForearm !== null,
       };
 
       const rResolved = resolveTrackedArmSide(
@@ -369,6 +396,10 @@ export function computeHumanoidIKBackground(
       if (referenceAltitude === null && refAltitudeSamples.length > 0) {
         referenceAltitude = refAltitudeSamples.reduce((a, b) => a + b, 0) / refAltitudeSamples.length;
         refAltitudeSamples = [];
+      }
+      if (referenceTorsoY === null && refTorsoYSamples.length > 0) {
+        referenceTorsoY = refTorsoYSamples.reduce((a, b) => a + b, 0) / refTorsoYSamples.length;
+        refTorsoYSamples = [];
       }
       onComplete(results);
     }
