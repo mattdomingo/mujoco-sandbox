@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { loadMuJoCo, applyFrame, readContactPressure, readInterHandPressure } from "@/lib/mujoco/loader";
 import type { MuJoCoInstance } from "@/lib/mujoco/loader";
 import { HAND_JOINT_NAMES } from "@/lib/pkg/types";
-import { resolveTrackedArmSide } from "@/lib/mujoco/humanoidIk";
+import { resolveTrackedArmSide, computeBendAngle } from "@/lib/mujoco/humanoidIk";
 import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL, UPPER_ARM_LEN, LOWER_ARM_LEN } from "@/lib/mujoco/ik";
 
 declare global {
@@ -25,6 +25,7 @@ declare global {
       readContactPressure: typeof readContactPressure;
       readInterHandPressure: typeof readInterHandPressure;
       resolveTrackedArmSide: typeof resolveTrackedArmSide;
+      computeBendAngle: typeof computeBendAngle;
       solveArmIK: typeof solveArmIK;
       R_SHOULDER_LOCAL: [number, number, number];
       L_SHOULDER_LOCAL: [number, number, number];
@@ -48,6 +49,7 @@ export default function MuJoCoTestPage() {
           readContactPressure,
           readInterHandPressure,
           resolveTrackedArmSide,
+          computeBendAngle,
           solveArmIK,
           R_SHOULDER_LOCAL,
           L_SHOULDER_LOCAL,

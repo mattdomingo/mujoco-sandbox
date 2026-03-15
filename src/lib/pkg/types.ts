@@ -114,4 +114,5 @@ export interface HumanoidFrame {
   torsoQuat: [number, number, number, number]; // wxyz — shoulder yaw + BASE_ROTATION
   headQuat:  [number, number, number, number]; // wxyz — full AVP head orientation relative to refYaw (Y-up world space)
   arms: HumanoidArmAngles;
+  abdomenY?: number;  // forward-bend hinge angle (radians); negative = forward flex
 }

@@ -784,3 +784,91 @@ test("solveArmIK produces unclamped angles for natural arm poses (arms at sides,
   expect(Math.abs(result.rNatural.e), "right elbow should be bent (non-zero)").toBeGreaterThan(0.01);
   expect(Math.abs(result.lNatural.e), "left elbow should be bent (non-zero)").toBeGreaterThan(0.01);
 });
+
+// ---------------------------------------------------------------------------
+// Test 18 — computeBendAngle returns 0 at reference altitude
+// ---------------------------------------------------------------------------
+test("computeBendAngle returns 0 when head is at reference altitude", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    return window.__mujocoTest!.computeBendAngle(1.5, 1.5);
+  });
+
+  expect(result, "no bend when head is exactly at reference altitude").toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Test 19 — computeBendAngle returns negative value when head drops (forward bend)
+// ---------------------------------------------------------------------------
+test("computeBendAngle returns negative angle when head altitude drops", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    // drop = 1.5 - 1.25 = 0.25m → raw = -(0.25 * 2.0) = -0.5 rad
+    return window.__mujocoTest!.computeBendAngle(1.25, 1.5);
+  });
+
+  expect(result, "forward bend should produce negative angle").toBeLessThan(0);
+  expect(result, "0.25m drop at BEND_SCALE=2.0 should produce -0.5 rad").toBeCloseTo(-0.5, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Test 20 — computeBendAngle clamps at BEND_MIN for large drops
+// ---------------------------------------------------------------------------
+test("computeBendAngle clamps to -75° when drop is very large", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    // drop = 2.0 - 0.0 = 2m → raw = -4 rad → clamp to -75° ≈ -1.3090 rad
+    return window.__mujocoTest!.computeBendAngle(0.0, 2.0);
+  });
+
+  const expectedMin = -75 * (Math.PI / 180);
+  expect(result, "large drop should clamp to BEND_MIN (-75°)").toBeCloseTo(expectedMin, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Test 21 — applyFrame writes abdomenY to qpos[abdomenYQposAdr]
+// ---------------------------------------------------------------------------
+test("applyFrame writes abdomenY into qpos at abdomenYQposAdr", async ({ page }) => {
+  await waitForMuJoCo(page);
+
+  const result = await page.evaluate(() => {
+    const { instance, applyFrame } = window.__mujocoTest!;
+    const { data, abdomenYQposAdr } = instance;
+
+    const humanoidFrame = {
+      frameIndex: 0,
+      torsoPos: [0, 1.0, 0] as [number, number, number],
+      torsoQuat: [1, 0, 0, 0] as [number, number, number, number],
+      headQuat:  [1, 0, 0, 0] as [number, number, number, number],
+      abdomenY: -0.35,
+      arms: {
+        rShoulder1: 0, rShoulder2: 0, rElbow: 0,
+        rReachable: false, rTrackedDataValid: false,
+        lShoulder1: 0, lShoulder2: 0, lElbow: 0,
+        lReachable: false, lTrackedDataValid: false,
+        rShoulder1Clamped: false, rShoulder2Clamped: false, rElbowClamped: false,
+        lShoulder1Clamped: false, lShoulder2Clamped: false, lElbowClamped: false,
+      },
+    };
+
+    const emptyFrame = {
+      index: 0, timestamp: 0,
+      rightHand: null, leftHand: null, devicePose: null,
+      rightArmInput: { wristTracked: false, elbowHintTracked: false },
+      leftArmInput:  { wristTracked: false, elbowHintTracked: false },
+    };
+
+    applyFrame(instance, emptyFrame, humanoidFrame);
+
+    return {
+      abdomenYQposAdr,
+      written: data.qpos[abdomenYQposAdr],
+    };
+  });
+
+  expect(result.abdomenYQposAdr, "abdomenYQposAdr should be a valid (>= 0) qpos index").toBeGreaterThanOrEqual(0);
+  expect(result.written, "qpos[abdomenYQposAdr] should hold the written abdomenY value").toBeCloseTo(-0.35, 4);
+});

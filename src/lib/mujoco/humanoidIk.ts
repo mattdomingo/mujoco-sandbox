@@ -33,6 +33,11 @@ import { solveArmIK, R_SHOULDER_LOCAL, L_SHOULDER_LOCAL } from "./ik";
 const BATCH_SIZE = 50;
 const IK_SMOOTH_ALPHA = 0.4; // 0 = frozen, 1 = no filter
 
+const BEND_SCALE = 2.0;                        // rad/m
+const BEND_MIN = -75 * (Math.PI / 180);        // max forward flex (negative)
+const BEND_MAX =  30 * (Math.PI / 180);        // max backward arch
+const REF_ALTITUDE_FRAMES = 10;               // frames to average for reference
+
 function smoothAngle(current: number, prev: number): number {
   return prev + IK_SMOOTH_ALPHA * (current - prev);
 }
@@ -122,6 +127,16 @@ function buildHeadQuat(
   _refYawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -refYaw);
   const result = _refYawQuat.clone().multiply(_headQuat);
   return [result.w, result.x, result.y, result.z];
+}
+
+/**
+ * Map a head altitude drop to an abdomen_y hinge angle.
+ * Negative result = forward flex (matches MuJoCo abdomen_y range="-75 30").
+ */
+export function computeBendAngle(headY: number, referenceAltitude: number): number {
+  const drop = referenceAltitude - headY;
+  const raw = -(drop * BEND_SCALE);
+  return raw < BEND_MIN ? BEND_MIN : raw > BEND_MAX ? BEND_MAX : raw;
 }
 
 const baseWXYZ: [number, number, number, number] = [
@@ -222,6 +237,9 @@ export function computeHumanoidIKBackground(
   let prevRight: ResolvedArmState | undefined;
   let prevLeft: ResolvedArmState | undefined;
   const total = frames.length;
+  let refAltitudeSamples: number[] = [];
+  let referenceAltitude: number | null = null;
+  let prevAbdomenY = 0;
 
   // No refYaw subtraction needed — computeHandMidpointYaw returns the absolute
   // yaw angle that aligns the shoulder line with the wrist-to-wrist direction.
@@ -297,11 +315,29 @@ export function computeHumanoidIKBackground(
       prevRight = rResolved;
       prevLeft = lResolved;
 
+      // Accumulate reference altitude from first N frames with valid devicePose
+      if (referenceAltitude === null && dp) {
+        refAltitudeSamples.push(dp.y);
+        if (refAltitudeSamples.length >= REF_ALTITUDE_FRAMES) {
+          referenceAltitude = refAltitudeSamples.reduce((a, b) => a + b, 0) / refAltitudeSamples.length;
+          refAltitudeSamples = [];
+        }
+      }
+
+      // Freeze abdomenY when tracking is lost; compute when valid
+      let abdomenY = prevAbdomenY;
+      if (referenceAltitude !== null && dp) {
+        const raw = computeBendAngle(dp.y, referenceAltitude);
+        abdomenY = prevAbdomenY + IK_SMOOTH_ALPHA * (raw - prevAbdomenY);
+        prevAbdomenY = abdomenY;
+      }
+
       results.push({
         frameIndex: frame.index,
         torsoPos,
         torsoQuat,
         headQuat,
+        abdomenY,
         arms: {
           rShoulder1: rResolved.shoulder1,
           rShoulder2: rResolved.shoulder2,
@@ -329,6 +365,11 @@ export function computeHumanoidIKBackground(
     if (!cancelled && solved < total) {
       setTimeout(processBatch, 0);
     } else if (!cancelled) {
+      // Fallback: captures with fewer than REF_ALTITUDE_FRAMES device-pose frames
+      if (referenceAltitude === null && refAltitudeSamples.length > 0) {
+        referenceAltitude = refAltitudeSamples.reduce((a, b) => a + b, 0) / refAltitudeSamples.length;
+        refAltitudeSamples = [];
+      }
       onComplete(results);
     }
   }

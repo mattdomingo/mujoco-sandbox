@@ -30,6 +30,8 @@ export interface MuJoCoInstance {
   lShoulder1QposAdr: number;
   lShoulder2QposAdr: number;
   lElbowQposAdr: number;
+  // qpos address for spine forward-bend hinge
+  abdomenYQposAdr: number;
 }
 
 export type MuJoCoStage =
@@ -218,11 +220,13 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
   const lShoulder1QposAdr = jntQposAdr("shoulder1_left");
   const lShoulder2QposAdr = jntQposAdr("shoulder2_left");
   const lElbowQposAdr     = jntQposAdr("elbow_left");
+  const abdomenYQposAdr   = jntQposAdr("abdomen_y");
 
   console.log(
     `[MuJoCo] arm joint qpos addresses — ` +
     `rS1=${rShoulder1QposAdr} rS2=${rShoulder2QposAdr} rE=${rElbowQposAdr} ` +
-    `lS1=${lShoulder1QposAdr} lS2=${lShoulder2QposAdr} lE=${lElbowQposAdr}`
+    `lS1=${lShoulder1QposAdr} lS2=${lShoulder2QposAdr} lE=${lElbowQposAdr} ` +
+    `abdomenY=${abdomenYQposAdr}`
   );
 
   const humanoidBodyNames = [
@@ -309,6 +313,7 @@ async function _load(report: (stage: MuJoCoStage) => void): Promise<MuJoCoInstan
     lShoulder1QposAdr,
     lShoulder2QposAdr,
     lElbowQposAdr,
+    abdomenYQposAdr,
   };
 }
 
@@ -348,6 +353,14 @@ function applyTorso(instance: MuJoCoInstance, hf: HumanoidFrame) {
   data.qpos[6] = hf.torsoQuat[3]; // z
 }
 
+// Write spine forward-bend angle into abdomen_y qpos slot.
+function applySpine(instance: MuJoCoInstance, hf: HumanoidFrame) {
+  if (hf.abdomenY === undefined) return;
+  if (instance.abdomenYQposAdr >= 0) {
+    instance.data.qpos[instance.abdomenYQposAdr] = hf.abdomenY;
+  }
+}
+
 // Write IK-solved arm hinge angles into their qpos slots.
 function applyArmIK(instance: MuJoCoInstance, arms: HumanoidArmAngles) {
   const { data } = instance;
@@ -369,6 +382,7 @@ export function applyFrame(
   if (humanoidFrame) {
     applyTorso(instance, humanoidFrame);
     applyArmIK(instance, humanoidFrame.arms);
+    applySpine(instance, humanoidFrame);
   }
 
   if (frame.objectPose) {
