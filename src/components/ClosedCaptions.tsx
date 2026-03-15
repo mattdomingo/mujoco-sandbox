@@ -20,7 +20,7 @@ export default function ClosedCaptions({ segments, captureTimeSec, visible }: Cl
   const active = findActiveSegment(segments, captureTimeSec);
   if (!active) return null;
   return (
-    <div className="absolute bottom-20 left-1/2 -translate-x-1/2 max-w-xl px-4 py-2
+    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-xl px-4 py-2
                     bg-black/70 backdrop-blur-sm rounded-lg text-center pointer-events-none">
       <p className="text-white text-sm leading-snug select-none">{active.text}</p>
     </div>
