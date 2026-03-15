@@ -20,6 +20,7 @@ import {
   setControlsDistance,
   loadScannedObject,
   updateScannedObject,
+  setFloorHeight,
 } from "@/lib/three/scene";
 import type { ThreeScene, MuJoCoReadMode } from "@/lib/three/scene";
 import PlaybackControlsPanel from "./PlaybackControls";
@@ -329,6 +330,26 @@ export default function CaptureViewer({ capture }: CaptureViewerProps) {
                 setIkStage("ready");
                 if (threeRef.current) {
                   threeRef.current.humanoid = makeHumanoidScene(threeRef.current.scene);
+                  // Align the floor grid with the humanoid's feet.
+                  // Apply the first humanoid frame so mj_forward populates xpos,
+                  // then read the average foot Y to position the stage correctly.
+                  const hf0 = humanoidFrames[0];
+                  const mj = mujocoRef.current;
+                  if (hf0 && mj) {
+                    const f0 = capture.frames[hf0.frameIndex] ?? capture.frames[0];
+                    if (f0) {
+                      applyFrame(mj, f0, hf0);
+                      const rFootId = mj.humanoidBodyIds.get("foot_right");
+                      const lFootId = mj.humanoidBodyIds.get("foot_left");
+                      const footYs: number[] = [];
+                      if (rFootId !== undefined) footYs.push(mj.data.xpos[rFootId * 3 + 1]);
+                      if (lFootId !== undefined) footYs.push(mj.data.xpos[lFootId * 3 + 1]);
+                      if (footYs.length > 0) {
+                        const floorY = footYs.reduce((a, b) => a + b, 0) / footYs.length;
+                        setFloorHeight(floorY);
+                      }
+                    }
+                  }
                 }
               }
             );

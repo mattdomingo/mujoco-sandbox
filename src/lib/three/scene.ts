@@ -77,6 +77,14 @@ function makeHandScene(scene: THREE.Scene, color: number): HandScene {
   return { joints, bones };
 }
 
+interface GridObjects {
+  floor: THREE.GridHelper;
+  back: THREE.GridHelper;
+  axes: THREE.AxesHelper;
+}
+
+let _gridObjects: GridObjects | null = null;
+
 function makeGrid(scene: THREE.Scene) {
   const grid = new THREE.GridHelper(6, 24, 0x334155, 0x1e293b);
   grid.position.set(0, 0.5, 0.5);
@@ -90,6 +98,16 @@ function makeGrid(scene: THREE.Scene) {
   const axes = new THREE.AxesHelper(0.15);
   axes.position.set(0, 0.5, 0.5);
   scene.add(axes);
+
+  _gridObjects = { floor: grid, back: backGrid, axes };
+}
+
+export function setFloorHeight(floorY: number) {
+  if (!_gridObjects) return;
+  _gridObjects.floor.position.setY(floorY);
+  _gridObjects.axes.position.setY(floorY);
+  // Back wall: stay ~0.5m above the floor at the same relative offset
+  _gridObjects.back.position.setY(floorY + 0.5);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +223,7 @@ export function initThreeScene(canvas: HTMLCanvasElement): ThreeScene {
   directional.position.set(2, 4, 3);
   scene.add(directional);
 
+  _gridObjects = null;
   makeGrid(scene);
 
   const rightHand    = makeHandScene(scene, 0xe69966); // orange
